@@ -8,8 +8,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -20,11 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: docker build -t klavish:ci .
       - name: Smoke-test container
         run: |
-          docker run -d --name k -p 8000:8000 klavish:ci
-          for i in $(seq 1 30); do curl -fs localhost:8000/api/health && break; sleep 1; done
-          curl -fs localhost:8000/api/health | grep Klavish
+          docker run -d --name k -p 18080:8000 klavish:ci || { docker ps -a; exit 1; }
+          for i in $(seq 1 40); do curl -fs localhost:18080/api/health && break; sleep 1; done
           docker logs k
+          curl -fs localhost:18080/api/health | grep Klavish
+          curl -fs localhost:18080/ | grep -q Klavish
