@@ -117,3 +117,4 @@ dialog::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(4px); }
 .srv { text-transform: none; letter-spacing: 0; color: #4ade80; }
 code { background: rgba(255,255,255,.08); padding: 1px 5px; border-radius: 5px; }
 .gitem .tag { font-size: 11px; color: var(--a3); }
+.logo-sub { color: var(--muted); font-weight: 400; font-size: 14px; margin-left: 4px; }

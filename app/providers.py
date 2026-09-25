@@ -21,7 +21,7 @@ from typing import Callable, Optional
 
 from PIL import Image
 
-UA = "GeniusVideoAI/1.0"
+UA = "Klavish/1.0 (+https://github.com/Klavish777)"
 
 # ---- model catalogue: id -> (label, allowed durations) -------------------
 POLLINATIONS_MODELS = {

@@ -1,4 +1,4 @@
-"""Genius Video AI - FastAPI backend.
+"""Klavish — AI video studio (FastAPI backend).
 
 Run:  uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
@@ -28,7 +28,7 @@ from .render import (GRADES, MOTIONS, RESOLUTIONS, TRANSITIONS, RenderSettings, 
 ROOT = Path(__file__).resolve().parent.parent
 providers.load_dotenv(ROOT / ".env")
 
-DATA = ROOT / "data"
+DATA = Path(os.getenv("KLAVISH_DATA", ROOT / "data"))
 VIDEOS, WORK, CLIPS, UPLOADS = DATA / "videos", DATA / "work", DATA / "clips", DATA / "uploads"
 for p in (VIDEOS, WORK, CLIPS, UPLOADS):
     p.mkdir(parents=True, exist_ok=True)
@@ -38,17 +38,44 @@ MAX_DURATION = 600.0
 MAX_SCENES = 60
 MAX_UPLOAD = 150 * 1024 * 1024
 
-app = FastAPI(title="Genius Video AI")
+app = FastAPI(title="Klavish", version="1.0.0")
 render_pool = ThreadPoolExecutor(max_workers=1)  # CPU-bound: one at a time
 clip_pool = ThreadPoolExecutor(max_workers=int(os.getenv("CLIP_WORKERS", "3")))  # network-bound
 jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 
 
+CLEANUP_HOURS = float(os.getenv("KLAVISH_CLEANUP_HOURS", "24"))
+KEEP_VIDEOS_DAYS = float(os.getenv("KLAVISH_KEEP_VIDEOS_DAYS", "7"))
+
+
+def _cleanup_loop() -> None:
+    """Delete stale temp files, clips and old renders so a hosted instance never fills its disk."""
+    while True:
+        now = time.time()
+        for folder, max_age in ((WORK, CLEANUP_HOURS), (CLIPS, CLEANUP_HOURS), (UPLOADS, CLEANUP_HOURS),
+                                (VIDEOS, KEEP_VIDEOS_DAYS * 24)):
+            for f in folder.glob("*"):
+                try:
+                    if f.is_file() and now - f.stat().st_mtime > max_age * 3600:
+                        f.unlink()
+                except OSError:
+                    pass
+        with jobs_lock:
+            for jid in [j for j, v in jobs.items() if v["status"] in ("done", "error")
+                        and now - v.get("created", now) > 6 * 3600]:
+                jobs.pop(jid, None)
+        time.sleep(1800)
+
+
+threading.Thread(target=_cleanup_loop, daemon=True, name="cleanup").start()
+
+
 def _new_job(kind: str, **kw) -> str:
     jid = uuid.uuid4().hex[:12]
     with jobs_lock:
-        jobs[jid] = {"id": jid, "kind": kind, "status": "queued", "progress": 0.0, "message": "В очереди", **kw}
+        jobs[jid] = {"id": jid, "kind": kind, "status": "queued", "progress": 0.0, "message": "В очереди",
+                     "created": time.time(), **kw}
     return jid
 
 
@@ -70,7 +97,7 @@ def _safe_id(s: str) -> str:
 @app.get("/api/health")
 def health():
     import imageio_ffmpeg
-    return {"ok": True, "ffmpeg": imageio_ffmpeg.get_ffmpeg_version()}
+    return {"ok": True, "app": "Klavish", "version": app.version, "ffmpeg": imageio_ffmpeg.get_ffmpeg_version()}
 
 
 @app.get("/api/options")

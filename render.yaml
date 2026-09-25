@@ -1,0 +1,14 @@
+# Деплой на Render.com в один клик: New → Blueprint → выбрать этот репозиторий.
+services:
+  - type: web
+    name: klavish
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: POLLINATIONS_KEY
+        sync: false
+      - key: RUNWAYML_API_SECRET
+        sync: false
+      - key: CLIP_WORKERS
+        value: "3"

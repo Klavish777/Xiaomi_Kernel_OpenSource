@@ -1,0 +1,16 @@
+services:
+  klavish:
+    build: .
+    image: klavish:latest
+    container_name: klavish
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - klavish-data:/data
+    restart: unless-stopped
+
+volumes:
+  klavish-data:

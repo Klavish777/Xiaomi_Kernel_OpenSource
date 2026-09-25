@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Запуск Genius Video AI: ./run.sh  (порт можно задать: PORT=9000 ./run.sh)
+# Запуск Klavish: ./run.sh  (порт можно задать: PORT=9000 ./run.sh)
 set -e
 cd "$(dirname "$0")"
 if [ ! -d .venv ]; then

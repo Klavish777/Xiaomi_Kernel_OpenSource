@@ -1,4 +1,4 @@
-/* Genius Video AI — frontend (v2: real AI video clips).
+/* Klavish — frontend (AI video studio).
  *
  * Flow: idea → storyboard (LLM) → keyframes (Flux) → AI clips per scene
  *       (Pollinations video / Runway Gen-4.5 via our server) → montage of exact length.
@@ -46,7 +46,7 @@ const totalDur = () => Math.max(15, Math.min(600, +$("#durNum").value || 15));
 const clipLen = () => isAI() ? (+$("#clipLen").value || 5) : 5;
 
 /* ---------------- keys ---------------- */
-try { Object.assign(state.keys, JSON.parse(localStorage.getItem("gva_keys") || "{}")); } catch {}
+try { Object.assign(state.keys, JSON.parse(localStorage.getItem("klavish_keys") || "{}")); } catch {}
 const hasKey = e => !!(state.keys[e] || state.options?.configured?.[e]);
 $("#btnKeys").onclick = openKeys;
 function openKeys() {
@@ -58,8 +58,8 @@ function openKeys() {
 $("#keysDlg").addEventListener("close", () => {
   if ($("#keysDlg").returnValue !== "save") return;
   state.keys = { pollinations: $("#keyPol").value.trim(), runway: $("#keyRun").value.trim() };
-  if ($("#keyRemember").checked) localStorage.setItem("gva_keys", JSON.stringify(state.keys));
-  else localStorage.removeItem("gva_keys");
+  if ($("#keyRemember").checked) localStorage.setItem("klavish_keys", JSON.stringify(state.keys));
+  else localStorage.removeItem("klavish_keys");
   updateEngineUI();
 });
 
@@ -76,7 +76,7 @@ function updateEngineUI() {
   const note = $("#engineNote"); note.className = "note";
   if (ai && state.options) {
     const models = state.options.models[state.engine];
-    const sel = $("#model"); const prev = localStorage.getItem("gva_model_" + state.engine);
+    const sel = $("#model"); const prev = localStorage.getItem("klavish_model_" + state.engine);
     sel.innerHTML = Object.entries(models).map(([id, m]) => `<option value="${id}">${m.label}</option>`).join("");
     if (prev && models[prev]) sel.value = prev;
     fillClipLens();
@@ -101,7 +101,7 @@ function fillClipLens() {
   $("#clipLen").innerHTML = opts.map(d => `<option value="${d}">${d} с</option>`).join("");
   $("#clipLen").value = opts.reduce((a, b) => Math.abs(b - cur) < Math.abs(a - cur) ? b : a, opts[0]);
 }
-$("#model").onchange = () => { localStorage.setItem("gva_model_" + state.engine, $("#model").value); fillClipLens(); updatePlan(); };
+$("#model").onchange = () => { localStorage.setItem("klavish_model_" + state.engine, $("#model").value); fillClipLens(); updatePlan(); };
 $("#clipLen").onchange = updatePlan;
 $("#transition").onchange = updatePlan;
 
@@ -384,6 +384,7 @@ function setProgress(p, msg) { $("#barFill").style.width = Math.round(p * 100) +
 function showResult(url) {
   $("#renderBox").classList.add("hidden");
   const v = $("#player"); v.src = url; $("#download").href = url;
+  $("#download").download = "klavish-" + url.split("/").pop();
   $("#result").classList.remove("hidden"); v.play().catch(() => {});
   $("#result").scrollIntoView({ behavior: "smooth", block: "center" });
   loadGallery();
@@ -401,7 +402,7 @@ async function loadGallery() {
     items.forEach(it => {
       const d = document.createElement("div"); d.className = "gitem";
       d.innerHTML = `<video src="${it.video}" poster="${it.poster}" controls preload="none"></video>
-        <div class="meta"><span></span><div><a class="icon" href="${it.video}" download title="Скачать">⬇</a><button class="icon" title="Удалить">🗑</button></div></div>`;
+        <div class="meta"><span></span><div><a class="icon" href="${it.video}" download="klavish-${it.id}.mp4" title="Скачать">⬇</a><button class="icon" title="Удалить">🗑</button></div></div>`;
       const dur = it.duration ? ` · ${Math.round(it.duration)} с` : "";
       $("span", d).innerHTML = "";
       $("span", d).append(document.createTextNode(it.title || new Date(it.created * 1000).toLocaleString()));
