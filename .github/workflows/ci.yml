@@ -31,4 +31,4 @@ jobs:
             echo "::error title=container::$(docker ps -a --format '{{.Status}}' | tr '\n' ' ') | $(docker logs k 2>&1 | tail -25 | tr '\n' '|' | cut -c1-3000)"
             exit 1
           fi
-          curl -fs localhost:18080/ | grep -q Klavish
+          page=$(curl -fs localhost:18080/) && echo "$page" | grep Klavish >/dev/null && echo "UI OK"
