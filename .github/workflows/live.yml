@@ -1,0 +1,67 @@
+name: Klavish live server
+
+# Поднимает Klavish на раннере GitHub и открывает публичный HTTPS-адрес через
+# бесплатный Cloudflare Quick Tunnel (без аккаунта). Адрес пишется в LIVE.md и в аннотацию.
+on:
+  workflow_dispatch:
+    inputs:
+      hours: { description: "Сколько часов держать (макс. 5.5)", default: "5" }
+  push:
+    paths: [".github/live-request.txt"]
+
+permissions:
+  contents: write
+
+concurrency: { group: klavish-live, cancel-in-progress: true }
+
+jobs:
+  serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements.txt
+      - name: Start Klavish
+        env:
+          POLLINATIONS_KEY: ${{ secrets.POLLINATIONS_KEY }}
+          RUNWAYML_API_SECRET: ${{ secrets.RUNWAYML_API_SECRET }}
+        run: |
+          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' > server.log 2>&1 &
+          for i in $(seq 1 30); do curl -fs localhost:8000/api/health && break; sleep 1; done
+      - name: Open public tunnel
+        run: |
+          curl -fsSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          nohup ./cloudflared tunnel --no-autoupdate --url http://localhost:8000 > tunnel.log 2>&1 &
+          for i in $(seq 1 60); do URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -1); [ -n "$URL" ] && break; sleep 1; done
+          [ -n "$URL" ] || { cat tunnel.log; exit 1; }
+          for i in $(seq 1 30); do curl -fs "$URL/api/health" && break; sleep 2; done
+          echo "URL=$URL" >> "$GITHUB_ENV"
+          echo "::notice title=Klavish LIVE::$URL"
+      - name: Publish address
+        run: |
+          H="${{ github.event.inputs.hours }}"
+          if [ -z "$H" ] && [ -f .github/live-request.txt ]; then H=$(sed -n 1p .github/live-request.txt); fi
+          H=${H:-5}
+          UNTIL=$(date -u -d "+$(python3 -c "print(int(min(float('$H'),5.5)*60))") minutes" '+%Y-%m-%d %H:%M UTC')
+          printf '# 🎬 Klavish — живой сервер\n\n**Адрес:** %s\n\nРаботает до: %s (GitHub Actions + Cloudflare Quick Tunnel)\n\nЗапуск: %s\n' "$URL" "$UNTIL" "$(date -u '+%Y-%m-%d %H:%M UTC')" > LIVE.md
+          git config user.name "klavish-bot"; git config user.email "klavish-bot@users.noreply.github.com"
+          git add LIVE.md && git commit -qm "live: $URL [skip ci]" || true
+          for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 3; done
+          echo "MINUTES=$(python3 -c "print(int(min(float('$H'),5.5)*60))")" >> "$GITHUB_ENV"
+      - name: Keep serving
+        run: |
+          end=$(( $(date +%s) + MINUTES*60 ))
+          while [ $(date +%s) -lt $end ]; do
+            curl -fs localhost:8000/api/health >/dev/null || { echo "server down"; tail -50 server.log; exit 1; }
+            pgrep -f cloudflared >/dev/null || { echo "tunnel down"; tail -50 tunnel.log; exit 1; }
+            sleep 60
+          done
+      - name: Mark offline
+        if: always()
+        run: |
+          git pull --rebase -q || true
+          [ -f LIVE.md ] && sed -i '1a\\n> ⚠️ Сервер остановлен. Чтобы запустить снова, измените .github/live-request.txt' LIVE.md
+          git add LIVE.md && git commit -qm "live: stopped [skip ci]" && git push -q || true
