@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  statuses: write
 
 concurrency: { group: klavish-live, cancel-in-progress: true }
 
@@ -40,6 +41,10 @@ jobs:
           for i in $(seq 1 30); do curl -fs "$URL/api/health" && break; sleep 2; done
           echo "URL=$URL" >> "$GITHUB_ENV"
           echo "::notice title=Klavish LIVE::$URL"
+          # publish the address as a commit status (visible in the GitHub UI next to the commit)
+          curl -fsS -X POST -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -d "{\"state\":\"success\",\"context\":\"klavish-live\",\"target_url\":\"$URL\",\"description\":\"Klavish LIVE\"}" >/dev/null
       - name: Publish address
         run: |
           H="${{ github.event.inputs.hours }}"
@@ -48,8 +53,9 @@ jobs:
           UNTIL=$(date -u -d "+$(python3 -c "print(int(min(float('$H'),5.5)*60))") minutes" '+%Y-%m-%d %H:%M UTC')
           printf '# 🎬 Klavish — живой сервер\n\n**Адрес:** %s\n\nРаботает до: %s (GitHub Actions + Cloudflare Quick Tunnel)\n\nЗапуск: %s\n' "$URL" "$UNTIL" "$(date -u '+%Y-%m-%d %H:%M UTC')" > LIVE.md
           git config user.name "klavish-bot"; git config user.email "klavish-bot@users.noreply.github.com"
+          export GIT_TERMINAL_PROMPT=0
           git add LIVE.md && git commit -qm "live: $URL [skip ci]" || true
-          for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 3; done
+          for i in 1 2 3; do timeout 60 git pull --rebase -q origin "${GITHUB_REF_NAME}" && timeout 60 git push -q origin "HEAD:${GITHUB_REF_NAME}" && break; sleep 3; done || true
           echo "MINUTES=$(python3 -c "print(int(min(float('$H'),5.5)*60))")" >> "$GITHUB_ENV"
       - name: Keep serving
         run: |
@@ -62,6 +68,7 @@ jobs:
       - name: Mark offline
         if: always()
         run: |
-          git pull --rebase -q || true
-          [ -f LIVE.md ] && sed -i '1a\\n> ⚠️ Сервер остановлен. Чтобы запустить снова, измените .github/live-request.txt' LIVE.md
-          git add LIVE.md && git commit -qm "live: stopped [skip ci]" && git push -q || true
+          export GIT_TERMINAL_PROMPT=0
+          timeout 60 git pull --rebase -q origin "${GITHUB_REF_NAME}" || true
+          [ -f LIVE.md ] && printf '\n> ⚠️ Сервер остановлен. Чтобы запустить снова, измените .github/live-request.txt\n' >> LIVE.md
+          git add LIVE.md && git commit -qm "live: stopped [skip ci]" && timeout 60 git push -q origin "HEAD:${GITHUB_REF_NAME}" || true

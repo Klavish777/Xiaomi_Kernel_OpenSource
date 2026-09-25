@@ -40,4 +40,5 @@ jobs:
           git config user.name "klavish-bot"; git config user.email "klavish-bot@users.noreply.github.com"
           git add demo
           git commit -m "demo: AI render [skip ci]" || exit 0
-          for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 3; done
+          export GIT_TERMINAL_PROMPT=0
+          for i in 1 2 3; do timeout 60 git pull --rebase -q origin "${GITHUB_REF_NAME}" && timeout 60 git push -q origin "HEAD:${GITHUB_REF_NAME}" && break; sleep 3; done
