@@ -1,0 +1,31 @@
+name: Klavish live probe
+
+# Проверяет живой сервер из LIVE.md с внешнего раннера и публикует результат статусом коммита.
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/probe-request.txt"]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Probe
+        run: |
+          git fetch -q origin "${GITHUB_REF_NAME}" && git checkout -q FETCH_HEAD -- LIVE.md 2>/dev/null || true
+          URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' LIVE.md | head -1)
+          H=$(curl -s --max-time 20 "$URL/api/health" | head -c 90 | tr -d '"{}')
+          UI=$(curl -s --max-time 20 "$URL/" | grep -c Klavish || true)
+          OPT=$(curl -s --max-time 20 "$URL/api/plan?total=30&clip=5" | tr -d '"{}')
+          STATE=failure; [ -n "$H" ] && [ "$UI" -gt 0 ] && STATE=success
+          DESC=$(echo "health[$H] ui=$UI plan[$OPT]" | cut -c1-138)
+          echo "$STATE $DESC"
+          curl -fsS -X POST -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -d "$(python3 -c 'import json,sys; print(json.dumps({"state":sys.argv[1],"context":"klavish-probe","target_url":sys.argv[2],"description":sys.argv[3]}))' "$STATE" "$URL" "$DESC")" >/dev/null
