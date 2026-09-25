@@ -10,6 +10,7 @@ import math
 import random
 import subprocess
 import textwrap
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -35,9 +36,10 @@ GRADES = ["none", "cinematic", "warm", "cold", "noir", "vintage", "vivid"]
 
 @dataclass
 class Scene:
-    image: Image.Image
+    image: Optional[Image.Image] = None
     caption: str = ""
     motion: str = "auto"
+    clip: Optional[Path] = None  # real AI video clip (takes priority over image)
 
 
 @dataclass
@@ -53,6 +55,7 @@ class RenderSettings:
     title: str = ""
     seed: int = 0
     audio_path: Optional[Path] = None
+    total_duration: Optional[float] = None  # exact final length; overrides scene_duration
     extra: dict = field(default_factory=dict)
 
 
@@ -82,6 +85,7 @@ def _cover(img: Image.Image, w: int, h: int, margin: float) -> Image.Image:
 # colour grading (applied once per scene, cheap)
 # --------------------------------------------------------------------------
 
+@lru_cache(maxsize=8)
 def _vignette(w: int, h: int, strength: float = 0.45) -> np.ndarray:
     y, x = np.ogrid[-1:1:complex(0, h), -1:1:complex(0, w)]
     r = np.sqrt(x * x + y * y) / math.sqrt(2)
@@ -259,6 +263,83 @@ def _transition(a: Image.Image, b: Image.Image, t: float, kind: str) -> Image.Im
 
 
 # --------------------------------------------------------------------------
+# video clips
+# --------------------------------------------------------------------------
+
+def clip_duration(path: Path) -> float:
+    try:
+        _, secs = imageio_ffmpeg.count_frames_and_secs(str(path))
+        return float(secs) or 0.0
+    except Exception:
+        return 0.0
+
+
+def clip_first_frame(path: Path) -> Optional[Image.Image]:
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    r = subprocess.run([ff, "-loglevel", "error", "-i", str(path), "-frames:v", "1", "-f", "image2pipe",
+                        "-vcodec", "png", "-"], capture_output=True)
+    if r.returncode or not r.stdout:
+        return None
+    import io
+    return Image.open(io.BytesIO(r.stdout)).convert("RGB")
+
+
+class ClipReader:
+    """Streams frames of a clip, scaled/cropped to w*h at the output fps.
+
+    get(t) must be called with non-decreasing t; frames are decoded lazily so
+    memory stays flat even for long clips. Past the end the last frame holds.
+    """
+
+    def __init__(self, path: Path, w: int, h: int, fps: int):
+        self.w, self.h, self.fps = w, h, fps
+        self.size = w * h * 3
+        self.duration = clip_duration(path) or 1.0
+        vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+              f"crop={w}:{h},fps={fps},format=rgb24")
+        self.proc = subprocess.Popen(
+            [imageio_ffmpeg.get_ffmpeg_exe(), "-loglevel", "error", "-i", str(path), "-an", "-vf", vf,
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
+        self.idx = -1
+        self.frame: Optional[Image.Image] = None
+        self.eof = False
+
+    def get(self, t: float) -> Image.Image:
+        want = max(0, int(t * self.fps))
+        while self.idx < want and not self.eof:
+            buf = self.proc.stdout.read(self.size)
+            if len(buf) < self.size:
+                self.eof = True
+                break
+            self.frame = Image.frombuffer("RGB", (self.w, self.h), buf, "raw", "RGB", 0, 1)
+            self.idx += 1
+        return self.frame if self.frame is not None else Image.new("RGB", (self.w, self.h))
+
+    def close(self):
+        try:
+            self.proc.stdout.close()
+            self.proc.kill()
+            self.proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def plan_timeline(n: int, settings: "RenderSettings") -> tuple[float, float]:
+    """Return (scene_duration, transition) so that the video hits total_duration."""
+    kind = settings.transition if settings.transition in TRANSITIONS else "crossfade"
+    td = 0.0 if kind == "none" or n == 1 else float(settings.transition_duration)
+    if settings.total_duration:
+        L = float(settings.total_duration)
+        d = (L + (n - 1) * td) / n
+        if td > d * 0.45:
+            td = d * 0.45 if n > 1 else 0.0
+            d = (L + (n - 1) * td) / n
+        return d, td
+    d = float(max(1.5, settings.scene_duration))
+    return d, min(td, d * 0.45)
+
+
+# --------------------------------------------------------------------------
 # main render
 # --------------------------------------------------------------------------
 
@@ -274,9 +355,8 @@ def render_video(
 
     w, h = RESOLUTIONS.get(settings.aspect, RESOLUTIONS["16:9"])
     fps = int(max(12, min(60, settings.fps)))
-    d = float(max(1.5, min(20.0, settings.scene_duration)))
     kind = settings.transition if settings.transition in TRANSITIONS else "crossfade"
-    T = 0.0 if kind == "none" or len(scenes) == 1 else float(min(settings.transition_duration, d * 0.45))
+    d, T = plan_timeline(len(scenes), settings)
     step = d - T
     total = step * (len(scenes) - 1) + d
     n_frames = int(round(total * fps))
@@ -287,6 +367,10 @@ def render_video(
     prepared = []
     last_motion = None
     for i, sc in enumerate(scenes):
+        if sc.clip is not None:
+            cap = _caption_layer(sc.caption, w, h) if settings.captions else None
+            prepared.append((sc.clip, "clip", cap))
+            continue
         src = _cover(sc.image, w, h, MARGIN)
         src = grade_image(src, settings.grade)
         motion = sc.motion if sc.motion in MOTIONS else settings.motion
@@ -304,9 +388,21 @@ def render_video(
         g_rng = np.random.default_rng(settings.seed)
         grain = [g_rng.normal(0, 9, (h, w, 1)).astype(np.float32) for _ in range(6)]
 
+    readers: dict[int, ClipReader] = {}
+
     def scene_frame(i: int, local_t: float) -> Image.Image:
         src, motion, cap = prepared[i]
-        fr = _motion_frame(src, motion, min(1.0, max(0.0, local_t / d)), w, h)
+        if motion == "clip":
+            if i not in readers:
+                readers[i] = ClipReader(src, w, h, fps)
+                for j in [k for k in readers if k < i - 1]:
+                    readers.pop(j).close()
+            rd = readers[i]
+            # play at natural speed if the clip is long enough, else gently slow it down to fill
+            rate = min(1.0, rd.duration / d) if rd.duration > 0 else 1.0
+            fr = grade_image(rd.get(local_t * rate), settings.grade)
+        else:
+            fr = _motion_frame(src, motion, min(1.0, max(0.0, local_t / d)), w, h)
         if cap is not None:
             fade = 0.45
             a = min(1.0, max(0.0, (local_t - 0.25) / fade), max(0.0, (d - 0.15 - local_t) / fade))
@@ -359,6 +455,8 @@ def render_video(
         err = proc.stderr.read().decode(errors="ignore")
         raise RuntimeError(f"ffmpeg оборвал поток: {err[-800:]}")
     finally:
+        for rd in readers.values():
+            rd.close()
         if proc.poll() is None:
             proc.kill()
 

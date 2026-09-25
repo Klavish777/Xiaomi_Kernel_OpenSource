@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Genius Video AI — видео из идеи</title>
+  <title>Genius Video AI — ИИ-видео из идеи</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
 </head>
@@ -12,31 +12,46 @@
   <header class="top">
     <div class="logo">🎬 <b>Genius</b> Video AI</div>
     <nav>
-      <a href="#create" class="active">Создать</a>
+      <a href="#create">Создать</a>
       <a href="#gallery">Мои видео</a>
+      <button id="btnKeys" class="btn small">⚙️ Ключи</button>
     </nav>
   </header>
 
   <main>
     <section class="hero">
-      <h1>Опишите идею — получите <span class="grad">готовое видео</span></h1>
-      <p class="sub">ИИ пишет раскадровку, рисует кадры и монтирует ролик: движение камеры, переходы, цветокоррекция, титры и саундтрек. Бесплатно и без ключей.</p>
+      <h1>Настоящее <span class="grad">ИИ-видео</span> из одной фразы</h1>
+      <p class="sub">Уровень Runway Gen-4.5, Veo 3.1 и Seedance 2.0. ИИ-режиссёр пишет сценарий, модели снимают каждую сцену с живым движением, а монтажёр собирает фильм нужной длины — от 15 секунд.</p>
     </section>
 
     <section id="create" class="card">
+      <label class="lbl">Движок видео</label>
+      <div class="engines" id="engines">
+        <button class="engine active" data-engine="pollinations">
+          <b>🎥 ИИ-видео</b><span>Seedance 2.0 · Veo 3.1 · Wan · Nova Reel</span><em>Pollinations · бесплатный ключ</em>
+        </button>
+        <button class="engine" data-engine="runway">
+          <b>🚀 Runway Gen-4.5</b><span>Gen-4.5 · Gen-4 Turbo · Veo · Seedance</span><em>ключ Runway API</em>
+        </button>
+        <button class="engine" data-engine="motion">
+          <b>🖼️ Анимация кадров</b><span>ИИ-кадры + движение камеры</span><em>бесплатно, без ключей</em>
+        </button>
+      </div>
+      <div id="engineNote" class="note"></div>
+
       <div class="tabs">
         <button class="tab active" data-mode="idea">✨ Из идеи</button>
-        <button class="tab" data-mode="photos">🖼️ Из моих фото</button>
+        <button class="tab" data-mode="photos">🖼️ Оживить мои фото</button>
       </div>
 
       <div class="mode mode-idea">
-        <textarea id="prompt" rows="3" placeholder="Например: Путешествие маленького робота через неоновый город к звёздам"></textarea>
+        <textarea id="prompt" rows="3" placeholder="Например: Маленький робот путешествует через неоновый город и находит путь к звёздам"></textarea>
         <div class="examples">
           <span>Идеи:</span>
           <button class="chip ex">Кот-астронавт открывает новую планету</button>
           <button class="chip ex">Древний дракон просыпается в заснеженных горах</button>
           <button class="chip ex">Утро в уютной кофейне в Париже</button>
-          <button class="chip ex">Подводный город атлантов</button>
+          <button class="chip ex">Погоня на гиперкарах по ночному Токио</button>
         </div>
         <label class="lbl">Стиль</label>
         <div class="chips" id="styles"></div>
@@ -46,21 +61,31 @@
         <label class="drop" id="drop">
           <input type="file" id="photoInput" accept="image/*" multiple hidden />
           <div>📁 Перетащите фото сюда или <u>выберите файлы</u></div>
-          <small>Каждое фото станет сценой. Порядок можно поменять.</small>
+          <small>Каждое фото станет стартовым кадром сцены — ИИ оживит его.</small>
         </label>
       </div>
 
+      <div class="duration">
+        <div class="dur-head">
+          <label class="lbl">Длина видео</label>
+          <div><input type="number" id="durNum" min="15" max="600" value="30" /> сек</div>
+        </div>
+        <input type="range" id="durRange" min="15" max="180" step="5" value="30" />
+        <div class="dur-marks"><span>15 с</span><span>1 мин</span><span>2 мин</span><span>3 мин</span></div>
+        <div id="planInfo" class="plan"></div>
+      </div>
+
       <div class="grid-settings">
-        <div><label class="lbl">Сцен</label><input type="number" id="nScenes" min="1" max="12" value="5" /></div>
+        <div class="ai-only"><label class="lbl">Модель</label><select id="model"></select></div>
+        <div class="ai-only"><label class="lbl">Длина клипа</label><select id="clipLen"></select></div>
         <div><label class="lbl">Формат</label>
           <select id="aspect"><option value="16:9">16:9 YouTube</option><option value="9:16">9:16 Shorts/TikTok</option><option value="1:1">1:1 Instagram</option><option value="4:5">4:5 Лента</option></select></div>
-        <div><label class="lbl">Секунд на сцену</label><input type="number" id="dur" min="2" max="15" step="0.5" value="4" /></div>
-        <div><label class="lbl">Движение камеры</label>
+        <div class="motion-only"><label class="lbl">Движение камеры</label>
           <select id="motion"><option value="auto">Авто (разное)</option><option value="zoom_in">Наезд</option><option value="zoom_out">Отъезд</option><option value="pan_left">Панорама ←</option><option value="pan_right">Панорама →</option><option value="pan_up">Вверх</option><option value="pan_down">Вниз</option></select></div>
         <div><label class="lbl">Переход</label>
-          <select id="transition"><option value="crossfade">Растворение</option><option value="black">Через чёрный</option><option value="zoom">Зум</option><option value="slide">Сдвиг</option><option value="wipe">Шторка</option><option value="none">Без перехода</option></select></div>
+          <select id="transition"><option value="crossfade">Растворение</option><option value="black">Через чёрный</option><option value="zoom">Зум</option><option value="slide">Сдвиг</option><option value="wipe">Шторка</option><option value="none">Прямая склейка</option></select></div>
         <div><label class="lbl">Цвет</label>
-          <select id="grade"><option value="cinematic">Кино</option><option value="vivid">Сочный</option><option value="warm">Тёплый</option><option value="cold">Холодный</option><option value="vintage">Винтаж + зерно</option><option value="noir">Нуар</option><option value="none">Как есть</option></select></div>
+          <select id="grade"><option value="cinematic">Кино</option><option value="none">Как есть</option><option value="vivid">Сочный</option><option value="warm">Тёплый</option><option value="cold">Холодный</option><option value="vintage">Винтаж + зерно</option><option value="noir">Нуар</option></select></div>
         <div><label class="lbl">Музыка</label>
           <select id="music"><option value="epic">Эпичная</option><option value="calm">Спокойная</option><option value="dreamy">Мечтательная</option><option value="happy">Весёлая</option><option value="dark">Мрачная</option><option value="none">Без музыки</option><option value="file">Свой файл…</option></select>
           <input type="file" id="audioFile" accept="audio/*" class="hidden" /></div>
@@ -68,6 +93,7 @@
       </div>
       <div class="row">
         <label class="check"><input type="checkbox" id="captions" checked /> Субтитры</label>
+        <label class="check ai-only"><input type="checkbox" id="useFrame" checked /> Кадр как старт (стабильнее)</label>
         <input type="text" id="title" placeholder="Заголовок в начале видео (необязательно)" />
       </div>
 
@@ -80,12 +106,12 @@
         <h2>🎞️ Раскадровка</h2>
         <div class="actions">
           <button id="btnAdd" class="btn">＋ Сцена</button>
-          <button id="btnRegenAll" class="btn">🔄 Перерисовать всё</button>
+          <button id="btnRegenAll" class="btn">🔄 Перерисовать кадры</button>
         </div>
       </div>
-      <p class="hint">Правьте подписи и промпты, перерисовывайте кадры, меняйте порядок или загружайте свои картинки.</p>
+      <p class="hint">Правьте подписи, описание кадра и движения. <b>🎥</b> — сгенерировать ИИ-клип для одной сцены, <b>🔄</b> — перерисовать кадр.</p>
       <div id="scenes" class="scenes"></div>
-      <button id="btnRender" class="btn primary big">🎬 Смонтировать видео</button>
+      <button id="btnRender" class="btn primary big">🎬 Создать видео</button>
       <div id="renderBox" class="render hidden">
         <div class="bar"><div id="barFill"></div></div>
         <div id="renderMsg" class="status"></div>
@@ -94,7 +120,7 @@
         <video id="player" controls playsinline></video>
         <div class="row center">
           <a id="download" class="btn primary" download>⬇️ Скачать MP4</a>
-          <button id="btnAgain" class="btn">🎲 Новый вариант</button>
+          <button id="btnAgain" class="btn">🎲 Перемонтировать</button>
         </div>
       </div>
     </section>
@@ -105,17 +131,34 @@
     </section>
   </main>
 
-  <footer>Кадры: <a href="https://pollinations.ai" target="_blank" rel="noopener">Pollinations.ai</a> (Flux), при недоступности сети — встроенный офлайн-художник. Монтаж: локально, ffmpeg.</footer>
+  <footer>Видео: Pollinations (Seedance, Veo, Wan) и Runway API · кадры: Pollinations Flux · монтаж: локально, ffmpeg.</footer>
+
+  <dialog id="keysDlg">
+    <form method="dialog">
+      <h2>⚙️ Ключи API</h2>
+      <p class="hint">Ключи хранятся только в вашем браузере и передаются лишь вашему серверу при генерации. Либо пропишите их в <code>.env</code> на сервере.</p>
+      <label class="lbl">Pollinations — <a href="https://enter.pollinations.ai" target="_blank" rel="noopener">получить бесплатно</a> <span id="srvPol" class="srv"></span></label>
+      <input type="password" id="keyPol" placeholder="sk_…" autocomplete="off" />
+      <label class="lbl">Runway API — <a href="https://dev.runwayml.com" target="_blank" rel="noopener">dev.runwayml.com</a> <span id="srvRun" class="srv"></span></label>
+      <input type="password" id="keyRun" placeholder="key_…" autocomplete="off" />
+      <label class="check" style="margin-top:14px"><input type="checkbox" id="keyRemember" checked /> Запомнить в этом браузере</label>
+      <div class="row center"><button class="btn primary" value="save">Сохранить</button><button class="btn" value="cancel">Отмена</button></div>
+    </form>
+  </dialog>
 
   <template id="sceneTpl">
     <div class="scene">
-      <div class="thumb"><img alt="" /><div class="spinner"></div><span class="badge"></span><span class="num"></span></div>
+      <div class="thumb"><img alt="" /><video muted loop playsinline class="hidden"></video><div class="spinner"></div><span class="badge"></span><span class="num"></span><div class="cstat"></div></div>
       <textarea class="caption" rows="2" placeholder="Подпись (субтитр)"></textarea>
-      <details><summary>Промпт для ИИ</summary><textarea class="sprompt" rows="3"></textarea></details>
+      <details><summary>Описание кадра и движения</summary>
+        <textarea class="sprompt" rows="3" placeholder="Что в кадре (англ.)"></textarea>
+        <textarea class="smotion" rows="2" placeholder="Движение / камера (англ.)"></textarea>
+      </details>
       <div class="scene-actions">
         <button class="icon left" title="Левее">◀</button>
-        <button class="icon regen" title="Перерисовать">🔄</button>
-        <label class="icon" title="Своя картинка">📁<input type="file" class="up" accept="image/*" hidden /></label>
+        <button class="icon animate" title="Сгенерировать ИИ-клип">🎥</button>
+        <button class="icon regen" title="Перерисовать кадр">🔄</button>
+        <label class="icon" title="Своя картинка или видео">📁<input type="file" class="up" accept="image/*,video/*" hidden /></label>
         <button class="icon del" title="Удалить">🗑</button>
         <button class="icon right" title="Правее">▶</button>
       </div>
