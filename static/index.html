@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Genius Video AI — видео из идеи</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <header class="top">
+    <div class="logo">🎬 <b>Genius</b> Video AI</div>
+    <nav>
+      <a href="#create" class="active">Создать</a>
+      <a href="#gallery">Мои видео</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Опишите идею — получите <span class="grad">готовое видео</span></h1>
+      <p class="sub">ИИ пишет раскадровку, рисует кадры и монтирует ролик: движение камеры, переходы, цветокоррекция, титры и саундтрек. Бесплатно и без ключей.</p>
+    </section>
+
+    <section id="create" class="card">
+      <div class="tabs">
+        <button class="tab active" data-mode="idea">✨ Из идеи</button>
+        <button class="tab" data-mode="photos">🖼️ Из моих фото</button>
+      </div>
+
+      <div class="mode mode-idea">
+        <textarea id="prompt" rows="3" placeholder="Например: Путешествие маленького робота через неоновый город к звёздам"></textarea>
+        <div class="examples">
+          <span>Идеи:</span>
+          <button class="chip ex">Кот-астронавт открывает новую планету</button>
+          <button class="chip ex">Древний дракон просыпается в заснеженных горах</button>
+          <button class="chip ex">Утро в уютной кофейне в Париже</button>
+          <button class="chip ex">Подводный город атлантов</button>
+        </div>
+        <label class="lbl">Стиль</label>
+        <div class="chips" id="styles"></div>
+      </div>
+
+      <div class="mode mode-photos hidden">
+        <label class="drop" id="drop">
+          <input type="file" id="photoInput" accept="image/*" multiple hidden />
+          <div>📁 Перетащите фото сюда или <u>выберите файлы</u></div>
+          <small>Каждое фото станет сценой. Порядок можно поменять.</small>
+        </label>
+      </div>
+
+      <div class="grid-settings">
+        <div><label class="lbl">Сцен</label><input type="number" id="nScenes" min="1" max="12" value="5" /></div>
+        <div><label class="lbl">Формат</label>
+          <select id="aspect"><option value="16:9">16:9 YouTube</option><option value="9:16">9:16 Shorts/TikTok</option><option value="1:1">1:1 Instagram</option><option value="4:5">4:5 Лента</option></select></div>
+        <div><label class="lbl">Секунд на сцену</label><input type="number" id="dur" min="2" max="15" step="0.5" value="4" /></div>
+        <div><label class="lbl">Движение камеры</label>
+          <select id="motion"><option value="auto">Авто (разное)</option><option value="zoom_in">Наезд</option><option value="zoom_out">Отъезд</option><option value="pan_left">Панорама ←</option><option value="pan_right">Панорама →</option><option value="pan_up">Вверх</option><option value="pan_down">Вниз</option></select></div>
+        <div><label class="lbl">Переход</label>
+          <select id="transition"><option value="crossfade">Растворение</option><option value="black">Через чёрный</option><option value="zoom">Зум</option><option value="slide">Сдвиг</option><option value="wipe">Шторка</option><option value="none">Без перехода</option></select></div>
+        <div><label class="lbl">Цвет</label>
+          <select id="grade"><option value="cinematic">Кино</option><option value="vivid">Сочный</option><option value="warm">Тёплый</option><option value="cold">Холодный</option><option value="vintage">Винтаж + зерно</option><option value="noir">Нуар</option><option value="none">Как есть</option></select></div>
+        <div><label class="lbl">Музыка</label>
+          <select id="music"><option value="epic">Эпичная</option><option value="calm">Спокойная</option><option value="dreamy">Мечтательная</option><option value="happy">Весёлая</option><option value="dark">Мрачная</option><option value="none">Без музыки</option><option value="file">Свой файл…</option></select>
+          <input type="file" id="audioFile" accept="audio/*" class="hidden" /></div>
+        <div><label class="lbl">FPS</label><select id="fps"><option>24</option><option>30</option></select></div>
+      </div>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="captions" checked /> Субтитры</label>
+        <input type="text" id="title" placeholder="Заголовок в начале видео (необязательно)" />
+      </div>
+
+      <button id="btnStory" class="btn primary big">✨ Придумать раскадровку</button>
+      <div id="storyStatus" class="status"></div>
+    </section>
+
+    <section id="board" class="card hidden">
+      <div class="board-head">
+        <h2>🎞️ Раскадровка</h2>
+        <div class="actions">
+          <button id="btnAdd" class="btn">＋ Сцена</button>
+          <button id="btnRegenAll" class="btn">🔄 Перерисовать всё</button>
+        </div>
+      </div>
+      <p class="hint">Правьте подписи и промпты, перерисовывайте кадры, меняйте порядок или загружайте свои картинки.</p>
+      <div id="scenes" class="scenes"></div>
+      <button id="btnRender" class="btn primary big">🎬 Смонтировать видео</button>
+      <div id="renderBox" class="render hidden">
+        <div class="bar"><div id="barFill"></div></div>
+        <div id="renderMsg" class="status"></div>
+      </div>
+      <div id="result" class="result hidden">
+        <video id="player" controls playsinline></video>
+        <div class="row center">
+          <a id="download" class="btn primary" download>⬇️ Скачать MP4</a>
+          <button id="btnAgain" class="btn">🎲 Новый вариант</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="gallery" class="card">
+      <h2>📼 Мои видео</h2>
+      <div id="galleryGrid" class="gallery"><p class="hint">Здесь появятся ваши ролики.</p></div>
+    </section>
+  </main>
+
+  <footer>Кадры: <a href="https://pollinations.ai" target="_blank" rel="noopener">Pollinations.ai</a> (Flux), при недоступности сети — встроенный офлайн-художник. Монтаж: локально, ffmpeg.</footer>
+
+  <template id="sceneTpl">
+    <div class="scene">
+      <div class="thumb"><img alt="" /><div class="spinner"></div><span class="badge"></span><span class="num"></span></div>
+      <textarea class="caption" rows="2" placeholder="Подпись (субтитр)"></textarea>
+      <details><summary>Промпт для ИИ</summary><textarea class="sprompt" rows="3"></textarea></details>
+      <div class="scene-actions">
+        <button class="icon left" title="Левее">◀</button>
+        <button class="icon regen" title="Перерисовать">🔄</button>
+        <label class="icon" title="Своя картинка">📁<input type="file" class="up" accept="image/*" hidden /></label>
+        <button class="icon del" title="Удалить">🗑</button>
+        <button class="icon right" title="Правее">▶</button>
+      </div>
+    </div>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
