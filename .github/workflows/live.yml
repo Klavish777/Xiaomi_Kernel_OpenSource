@@ -17,6 +17,7 @@ concurrency: { group: klavish-live, cancel-in-progress: true }
 
 jobs:
   serve:
+    if: false  # decommissioned
     runs-on: ubuntu-latest
     timeout-minutes: 345
     steps:
