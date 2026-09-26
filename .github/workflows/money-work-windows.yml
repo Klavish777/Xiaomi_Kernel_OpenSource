@@ -1,0 +1,65 @@
+name: Build Money Work for Windows
+
+on:
+  push:
+    branches:
+      - arena/01a0dce0-xiaomi-kernel-opensource
+    paths:
+      - 'money-work/**'
+      - '.github/workflows/money-work-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: money-work/package-lock.json
+
+      - name: Verify app version
+        working-directory: money-work
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $package = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne $package) { throw "VERSION ($version) differs from package.json ($package)" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+        id: version
+
+      - name: Install and build Windows installer
+        working-directory: money-work
+        run: npm ci; npm run dist:win
+        shell: pwsh
+
+      - name: Publish versioned download
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $tag = "money-work-v$env:APP_VERSION"
+          $installer = "money-work/release/Money-Work-Setup-$env:APP_VERSION.exe"
+          $existing = gh release list --json tagName --jq '.[].tagName' | Where-Object { $_ -eq $tag }
+          if ($existing) {
+            gh release upload $tag $installer --clobber
+          } else {
+            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Windows installer for the Money Work demo dashboard." --prerelease
+          }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Money-Work-Windows-Installer
+          path: money-work/release/Money-Work-Setup-${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+          retention-days: 14
