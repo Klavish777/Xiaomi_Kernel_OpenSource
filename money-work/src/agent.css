@@ -118,3 +118,110 @@
   .research-feature { align-items:flex-start; }
 }
 @media (prefers-reduced-motion: reduce) { .globe-orb.spinning { animation-duration:60s !important; } }
+
+/* Fixed-viewport workspace: keep Overview and Agents visible without page-level scrolling. */
+html,body,#root { height:100%; min-height:0; }
+body { overflow:hidden; }
+.app-shell { height:100vh; min-height:0; overflow:hidden; }
+.main-area { display:flex; flex-direction:column; height:100vh; min-height:0; overflow:hidden; }
+.topbar { flex:0 0 62px; }
+.workspace-content { flex:1 1 auto; min-height:0; overflow-y:auto; scrollbar-width:none; }
+.workspace-content::-webkit-scrollbar { display:none; }
+.workspace-content.overview-fit,.workspace-content.agents-fit { overflow:hidden; }
+@media (max-width:900px) {
+  .workspace-content.overview-fit,.workspace-content.agents-fit { overflow-y:auto; scrollbar-width:none; }
+}
+@media (min-width:901px) and (max-height:900px) {
+  .workspace-content { padding:12px 20px; }
+  .compact-heading { margin-bottom:8px; }
+  .compact-heading .eyebrow { margin-bottom:3px; }
+  .compact-heading h1 { font-size:19px; }
+  .compact-heading p { margin-top:3px; font-size:9px; }
+  .summary-grid { gap:8px; margin-bottom:8px; }
+  .summary-card { min-height:66px; gap:4px; padding:8px 11px; }
+  .summary-card > strong { font-size:15px; }
+  .summary-card > small { font-size:8px; }
+  .dashboard-chart { margin-bottom:8px; padding:9px 12px 7px; }
+  .dashboard-chart .chart-wrap,.empty-chart { height:clamp(90px,calc(100vh - 610px),170px); min-height:0; }
+  .dashboard-chart .panel-heading { margin-bottom:3px; }
+  .dashboard-chart .price-row { margin-top:3px; }
+  .analysis-agent-grid { gap:8px; margin-bottom:8px; }
+  .work-card { min-height:0; padding:10px 12px; }
+  .work-card-heading h2 { margin-top:3px; font-size:12px; }
+  .analysis-signal { margin-top:8px; padding:7px 9px; }
+  .analysis-stats { gap:6px; margin-top:6px; }
+  .analysis-stats div { gap:3px; padding:6px; }
+  .work-card .muted-copy { margin-top:6px; font-size:8px; line-height:1.35; }
+  .research-mini { gap:10px; margin:8px 0 6px; padding:7px 9px; }
+  .research-mini .globe-orb { width:44px; height:44px; }
+  .research-mini strong { font-size:14px; }
+  .research-mini small { font-size:8px; }
+  .agent-card .agent-actions { gap:6px; margin-top:7px; }
+  .agent-card .secondary-action { min-height:28px; padding:5px 8px; }
+  .paper-overview-row { gap:9px; padding:8px 10px; margin-bottom:0; }
+  .paper-overview-icon { width:30px; height:30px; }
+  .paper-overview-copy { gap:2px; }
+  .paper-overview-copy strong { font-size:10px; }
+  .paper-overview-copy small { font-size:8px; line-height:1.25; }
+  .paper-overview-row .status-badge { padding:4px 6px; }
+  .paper-overview-row .secondary-action { min-height:28px; padding:5px 8px; }
+  .agents-fit { padding-top:10px; padding-bottom:10px; }
+  .agents-fit .agents-page { height:100%; min-height:0; grid-template-rows:auto minmax(0,1fr) auto; gap:7px; }
+  .agents-fit .section-page-heading h1 { font-size:18px; }
+  .agents-fit .section-page-heading p { margin-top:3px; font-size:9px; }
+  .agents-fit .agent-control-grid { min-height:0; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:8px; }
+  .agents-fit .agent-control-card { min-height:0; overflow:hidden; padding:9px; }
+  .agents-fit .agent-control-heading h2 { margin-top:3px; font-size:12px; }
+  .agents-fit .large-globe { width:54px; height:54px; }
+  .agents-fit .research-feature { min-height:65px; gap:9px; margin:7px 0 5px; padding:6px; }
+  .agents-fit .research-value { gap:2px; }
+  .agents-fit .research-value strong { font-size:14px; }
+  .agents-fit .research-value small { font-size:8px; line-height:1.3; }
+  .agents-fit .research-results-list { margin:4px 0; }
+  .agents-fit .research-results-list > span { gap:5px; padding:3px 1px; font-size:8px; }
+  .agents-fit .research-results-list svg { width:12px; height:12px; }
+  .agents-fit .research-footnote,.agents-fit .reference-comparison { margin-top:5px; font-size:7px; }
+  .agents-fit .reference-comparison { padding:5px; }
+  .agents-fit .reference-comparison small { font-size:7px; }
+  .agents-fit .agent-actions { gap:5px; margin-top:6px; }
+  .agents-fit .agent-actions .secondary-action,.agents-fit .agent-actions .modal-primary { min-height:27px; padding:4px 7px; font-size:8px; }
+  .agents-fit .paper-warning { margin:5px 0; padding:6px; font-size:7px; }
+  .agents-fit .execution-mode-picker { margin-top:6px; }
+  .agents-fit .execution-mode-picker button { min-height:24px; padding:4px 8px; }
+  .agents-fit .compact-paper-fields { gap:5px; margin-top:6px; }
+  .agents-fit .paper-config-grid label { gap:3px; font-size:7px; }
+  .agents-fit .paper-config-grid input,.agents-fit .schedule-inline input { min-height:26px; padding:0 6px; font-size:9px; }
+  .agents-fit .cash-actions { gap:4px; margin-top:5px; }
+  .agents-fit .cash-actions .secondary-action { min-height:23px; padding:4px 6px; font-size:7px; }
+  .agents-fit .cash-actions > span { font-size:7px; }
+  .agents-fit .live-account-summary { gap:3px; margin-top:5px; padding:6px; font-size:7px; }
+  .agents-fit .schedule-inline { grid-template-columns:64px 64px minmax(0,1fr); gap:5px; margin-top:6px; }
+  .agents-fit .schedule-inline label,.agents-fit .weekday-picker > span { font-size:7px; }
+  .agents-fit .compact-weekdays button { width:22px; height:22px; }
+  .agents-fit .paper-performance-grid { gap:4px; margin-top:6px; }
+  .agents-fit .paper-performance-grid > div { min-height:35px; gap:2px; padding:5px; }
+  .agents-fit .analyst-consensus { gap:4px; margin-top:5px; padding:6px; }
+  .agents-fit .analyst-status-grid { gap:4px; }
+  .agents-fit .analyst-status-grid b { font-size:7px; }
+  .agents-fit .analyst-status-grid small,.agents-fit .consensus-footnote { font-size:6.5px; }
+  .agents-fit .broker-agent-message { gap:2px; margin-top:5px; padding:5px 6px; font-size:7px; }
+  .agents-fit .compact-agent-actions { gap:6px; margin-top:5px; }
+  .agents-fit .compact-agent-actions .modal-primary,.agents-fit .compact-agent-actions .modal-danger { min-height:27px; padding:5px 8px; font-size:8px; }
+  .agents-fit .agent-feed-status { font-size:7px; }
+  .agents-fit .compact-agent-note { margin-top:5px; font-size:7px; line-height:1.25; }
+  .agents-fit .paper-history-panel { padding:7px 10px; }
+}
+@media (min-width:901px) and (max-height:720px) {
+  .topbar { flex-basis:52px; height:52px; }
+  .workspace-content { padding:8px 14px; }
+  .compact-heading p { display:none; }
+  .summary-card { min-height:56px; padding:6px 9px; }
+  .dashboard-chart { padding:7px 10px 5px; }
+  .dashboard-chart .chart-wrap,.empty-chart { height:clamp(76px,calc(100vh - 590px),110px); }
+  .analysis-stats { margin-top:4px; }
+  .work-card .muted-copy { display:none; }
+  .agents-fit .section-page-heading p { display:none; }
+  .agents-fit .agents-page { gap:5px; }
+  .agents-fit .agent-control-card { padding:7px; }
+  .agents-fit .compact-agent-note { display:none; }
+}

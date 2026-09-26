@@ -1,6 +1,6 @@
-# Money Work — v0.4.9
+# Money Work — v0.4.10
 
-Windows MT5 dashboard for AUD/CAD chart analysis, internet reference checks, configurable paper funds, and a manually armed automated MT5 strategy runner. The internet source publishes daily public reference rates, not live execution prices. The chart and strategy signals use broker MT5 data.
+Windows MT5 dashboard for AUD/CAD chart analysis, internet reference checks, configurable paper funds, and a manually armed automated MT5 strategy runner. On standard desktop resolutions, Overview and Agents use a compact fixed-height layout so the primary controls and information fit without page-level vertical scrolling; dense history/market lists remain locally contained. The internet source publishes daily public reference rates, not live execution prices. The chart and strategy signals use broker MT5 data.
 
 ## Automated AUD/CAD runner
 

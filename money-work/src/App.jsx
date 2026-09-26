@@ -566,7 +566,7 @@ function App() {
           </div>
         </header>
 
-        <div className="page-content workspace-content">
+        <div className={`page-content workspace-content ${activeNav === 'Overview' ? 'overview-fit' : activeNav === 'Agents' ? 'agents-fit' : ''}`}>
           {mt5Error && <div className="connector-banner"><ShieldCheck size={15} /> {mt5Error}<button onClick={() => setMt5Error('')}>Dismiss</button></div>}
 
           {activeNav === 'Overview' && <>
