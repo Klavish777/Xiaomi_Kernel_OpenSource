@@ -15,11 +15,13 @@ from datetime import datetime, timedelta
 from trading_policy import (
     BOT_MAGIC,
     MAX_DAILY_LOSS_RATIO,
+    MAX_AGENT_EQUITY,
     MAX_SPREAD_PIPS,
     MAX_VOLUME,
     STOP_LOSS_PIPS,
     TAKE_PROFIT_PIPS,
     account_mode_allowed,
+    agent_equity_goal_reached,
     daily_loss_exceeded,
     is_inside_schedule,
     loss_streak_cooldown,
@@ -287,6 +289,8 @@ def evaluate_agent(command: dict) -> dict:
             raise RuntimeError(f"Could not read today's trade history: {mt5.last_error()}")
         account_realized_pnl = sum(float(row.profit) + float(row.commission) + float(row.swap) for row in todays_deals)
         account_floating_pnl = float(getattr(account, "profit", 0))
+        account_equity = float(getattr(account, "equity", float(account.balance) + account_floating_pnl))
+        equity_or_balance = max(account_equity, float(account.balance))
         start_balance = float(account.balance) - account_realized_pnl
         daily_pnl = account_realized_pnl + account_floating_pnl
         daily_stop = daily_loss_exceeded(start_balance, account_realized_pnl, account_floating_pnl)
@@ -312,6 +316,12 @@ def evaluate_agent(command: dict) -> dict:
                 consecutive_losses += 1
             else:
                 break
+
+        if agent_equity_goal_reached(equity_or_balance):
+            closed = [_close_bot_position(position, symbol, tick, info) for position in bot_positions]
+            return {"state": "capital_goal_reached", "equity": account_equity, "balance": float(account.balance),
+                    "equityCap": MAX_AGENT_EQUITY, "accountCurrency": str(getattr(account, "currency", "account currency")),
+                    "closed": closed, "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
 
         if daily_stop:
             closed = []
@@ -348,6 +358,9 @@ def evaluate_agent(command: dict) -> dict:
         if cooldown_until:
             return {"state": "learning_cooldown", "cooldownUntil": cooldown_until.isoformat(), "dailyPnl": daily_pnl,
                     "closedTrades": len(closed_trades), "winRate": win_rate, "consecutiveLosses": consecutive_losses}
+        if command.get("entryAllowed") is False:
+            return {"state": "analyst_paused", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate,
+                    "message": "At least one entry analyst is paused or not ready; no new position was opened."}
         if signal == "WAIT":
             return {"state": "waiting_signal", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
         if not reference_is_valid(command.get("reference"), now):

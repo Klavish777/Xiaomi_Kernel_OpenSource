@@ -6,6 +6,7 @@ import math
 
 BOT_MAGIC = 26092707
 MAX_VOLUME = 0.01
+MAX_AGENT_EQUITY = 80_000_000.0
 STOP_LOSS_PIPS = 20
 TAKE_PROFIT_PIPS = 30
 PROFIT_TARGET_PER_LOT = 30.0  # 0.30 account-currency units per 0.01 lot.
@@ -48,6 +49,11 @@ def profit_target_for_volume(volume: float) -> float:
     if not math.isfinite(size) or size <= 0:
         raise ValueError("Position volume must be finite and positive to calculate the cash-profit target.")
     return round(size * PROFIT_TARGET_PER_LOT, 2)
+
+
+def agent_equity_goal_reached(equity: float) -> bool:
+    value = float(equity)
+    return math.isfinite(value) and value >= MAX_AGENT_EQUITY
 
 
 def daily_loss_exceeded(start_balance: float, realized_pnl: float, floating_pnl: float) -> bool:

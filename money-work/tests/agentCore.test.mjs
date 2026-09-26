@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, computeRuleSignal, isInsideSchedule, summarizePaperHistory, movingAverageValues, sliceChartHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
+import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, computeRuleSignal, isInsideSchedule, summarizePaperHistory, movingAverageValues, sliceChartHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
 
 test('schedule follows selected local weekdays and inclusive start/exclusive end', () => {
   const mondayMorning = new Date(2026, 8, 28, 9, 0);
@@ -41,6 +41,9 @@ test('three-analyst consensus requires directional data, fresh quote, validated 
   const weakLearning = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 65 }, quote, referenceData, brokerStatus: { closedTrades: 5, winRate: 0.2 }, now });
   assert.equal(weakLearning.entryAllowed, false);
   assert.equal(weakLearning.reason, 'adaptive_filter');
+  const pausedAgent = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote, referenceData, brokerStatus: { state: 'analyst_paused' }, now });
+  assert.equal(pausedAgent.entryAllowed, false);
+  assert.equal(pausedAgent.reason, 'analyst_paused');
   assert.equal(validateReferenceRecord({ ...referenceData, fetchedAt: '2000-01-01T00:00:00Z' }, now).valid, false);
 });
 
@@ -65,6 +68,26 @@ test('paper history applies the same two-loss cooldown and recent-win-rate safeg
   assert.equal(consensus.entryAllowed, false);
   assert.equal(consensus.reason, 'learning_cooldown');
   assert.equal(summarizePaperHistory([{ ...losses[0], closeTime: '2026-09-26T10:30:00Z' }], now).state, undefined);
+});
+
+test('paper agent latches off at 80 million equity and closes its open virtual position', () => {
+  const now = new Date('2026-09-26T12:00:00Z');
+  const settings = { capital: MAX_AGENT_EQUITY, maxAllocation: 1000, start: '00:00', end: '23:59', days: [0, 1, 2, 3, 4, 5, 6] };
+  const openPositionState = {
+    enabled: true,
+    capital: MAX_AGENT_EQUITY - 1,
+    realizedPnl: 0,
+    trades: [{ id: 'goal-position', symbol: 'AUDCAD', direction: 1, side: 'BUY', openPrice: 1, units: 2, status: 'open' }],
+    position: { id: 'goal-position', symbol: 'AUDCAD', direction: 1, side: 'BUY', openPrice: 1, units: 2, status: 'open' },
+  };
+  const stopped = advancePaperAgent(openPositionState, { signal: 'WATCH BUY', price: 1.5, quoteTime: 5000, symbol: 'AUDCAD', settings, now });
+  assert.equal(stopped.enabled, false);
+  assert.equal(stopped.goalReached, true);
+  assert.equal(stopped.position, null);
+  assert.equal(stopped.trades[0].status, 'closed');
+  const deposit = adjustVirtualBalance({ capital: MAX_AGENT_EQUITY - 10, realizedPnl: 0, cashFlows: [] }, 1, 10, now);
+  assert.equal(deposit.ok, true);
+  assert.equal(deposit.state.goalReached, true);
 });
 
 test('paper learner can block new entries without interfering with position closure', () => {

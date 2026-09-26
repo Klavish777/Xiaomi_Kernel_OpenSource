@@ -250,6 +250,7 @@ ipcMain.handle('mt5:agent-evaluate', async (_event, payload) => {
     symbol: String(payload.symbol),
     signal: payload.signal,
     rsi,
+    entryAllowed: payload.entryAllowed !== false,
     liveConfirmed: payload.liveConfirmed === true,
     schedule: { start: String(schedule.start || ''), end: String(schedule.end || ''), days },
     reference,

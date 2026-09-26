@@ -113,6 +113,19 @@ class BridgeAgentTests(unittest.TestCase):
         self.assertAlmostEqual(request['price'] - request['sl'], 0.002)
         self.assertAlmostEqual(request['tp'] - request['price'], 0.003)
 
+    def test_80_million_equity_goal_closes_bot_position_and_latches_stop_state(self):
+        FAKE_MT5.account = SimpleNamespace(trade_mode=0, trade_allowed=True, balance=80_000_000,
+                                           equity=79_999_000, login=123, currency='USD')
+        FAKE_MT5.positions = [
+            SimpleNamespace(symbol='AUDCAD', magic=bridge.BOT_MAGIC, type=0, ticket=80, volume=0.01, profit=0, swap=0),
+            SimpleNamespace(symbol='AUDCAD', magic=99, type=0, ticket=81, volume=0.01, profit=0, swap=0),
+        ]
+        result = bridge.evaluate_agent(demo_command())
+        self.assertEqual(result['state'], 'capital_goal_reached')
+        self.assertEqual(result['equityCap'], 80_000_000)
+        self.assertEqual(result['accountCurrency'], 'USD')
+        self.assertEqual([request['position'] for request in FAKE_MT5.requests], [80])
+
     def test_position_closes_when_volume_scaled_cash_profit_target_is_met(self):
         FAKE_MT5.positions = [SimpleNamespace(symbol='AUDCAD', magic=bridge.BOT_MAGIC, type=0, ticket=8,
                                                volume=0.01, profit=0.30, swap=0, commission=0)]
@@ -190,6 +203,20 @@ class BridgeAgentTests(unittest.TestCase):
         result = bridge.evaluate_agent(demo_command())
         self.assertEqual(result['state'], 'blocked_manual_position')
         self.assertEqual(FAKE_MT5.requests, [])
+
+    def test_paused_analyst_blocks_new_entries_but_not_position_exits(self):
+        command = demo_command()
+        command['entryAllowed'] = False
+        result = bridge.evaluate_agent(command)
+        self.assertEqual(result['state'], 'analyst_paused')
+        self.assertEqual(FAKE_MT5.requests, [])
+
+        FAKE_MT5.positions = [SimpleNamespace(symbol='AUDCAD', magic=bridge.BOT_MAGIC, type=0, ticket=12,
+                                               volume=0.01, profit=0, swap=0, commission=0)]
+        command['signal'] = 'WATCH SELL'
+        result = bridge.evaluate_agent(command)
+        self.assertEqual(result['state'], 'position_closed')
+        self.assertEqual([request['position'] for request in FAKE_MT5.requests], [12])
 
     def test_account_wide_one_percent_loss_stops_new_orders(self):
         FAKE_MT5.account.balance = 9900

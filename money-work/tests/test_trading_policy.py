@@ -10,6 +10,7 @@ from trading_policy import (
     MAX_DAILY_LOSS_RATIO,
     MAX_VOLUME,
     account_mode_allowed,
+    agent_equity_goal_reached,
     daily_loss_exceeded,
     is_inside_schedule,
     loss_streak_cooldown,
@@ -37,6 +38,11 @@ class TradingPolicyTests(unittest.TestCase):
         self.assertAlmostEqual(pip_size(5, 0.00001), 0.0001)
         self.assertAlmostEqual(pip_size(3, 0.001), 0.01)
         self.assertAlmostEqual(pip_size(4, 0.0001), 0.0001)
+
+    def test_agent_equity_goal_triggers_at_80_million_account_units(self):
+        self.assertFalse(agent_equity_goal_reached(79_999_999.99))
+        self.assertTrue(agent_equity_goal_reached(80_000_000))
+        self.assertFalse(agent_equity_goal_reached(float('inf')))
 
     def test_daily_loss_stop_at_one_percent(self):
         self.assertFalse(daily_loss_exceeded(10000, -99, 0))
