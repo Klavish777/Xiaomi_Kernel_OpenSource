@@ -1,21 +1,30 @@
-# Money Work — v0.4.7
+# Money Work — v0.4.8
 
-Windows desktop dashboard for read-only MetaTrader 5 data, AUD/CAD technical analysis, a public daily FX reference checker, and configurable paper-trading simulation. The MT5 connector has **no order-placement command**. The automated strategy is virtual-only: it cannot send an order or use account funds.
+Windows MT5 dashboard for AUD/CAD chart analysis, internet reference checks, configurable paper funds, and a manually armed automated MT5 strategy runner. The internet source publishes daily public reference rates, not live execution prices. The chart and strategy signals use broker MT5 data.
 
-## Agents and data sources
+## Automated AUD/CAD runner
 
-- **AUD/CAD chart and rule analyzer:** reads actual bars and quotes from the connected MT5 broker. The indicator uses EMA(20/50) and RSI(14); it is deterministic technical analysis, not a generative AI model, prediction, or guarantee. If no MT5 data is connected, no fictional broker prices are shown.
-- **Internet reference checker:** retrieves AUD/CAD from the public Frankfurter API (`https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD`) and checks response schema, publication date, and that the reference rate is positive. These are daily public reference rates, not live/interbank execution prices. The animated globe runs while the scheduled checker is enabled; its displayed rotation speed is tied to the most recent validation throughput. The checker runs once on activation and then every 15 minutes. The reference is compared to MT5 mid only as a timestamp-mismatched informational comparison, never as a trade signal. It is not a general-purpose web crawler or self-training AI.
-- **Paper strategy agent:** optional user-started simulation based on MT5 quotes and the rule signal. Configure a virtual CAD balance, per-simulation allocation cap, local start/end time, and weekdays. It records virtual positions/P&L locally. Settings and the paper log are saved on this device; the simulator starts paused after app restart. No broker request can place or modify a trade. Spread, fees, slippage, margin and real execution are not simulated; paper outcomes are not a forecast of returns.
+- Select **Paper** for virtual trades or **MT5 Demo / MT5 Live** for broker execution on the currently connected account. The runner starts **off** and stops after the app restarts. Live mode requires typing `LIVE` into a separate confirmation dialog each time it is armed.
+- The app evaluates fresh ticks at most once every two seconds, subject to the broker actually supplying fresh quotes. The rule signal uses EMA(20/50) and RSI(14). It only manages its own AUDCAD positions (magic number `26092707`); if another position already exists on the same pair, it blocks a new entry.
+- Bridge-side hard limits: maximum 0.01 lot, no more than one agent position, mandatory stop-loss of at least 20 pips and take-profit of at least 30 pips, maximum 5-pip spread, and a new-entry/position-close stop at 1% account-wide daily loss. Two consecutive losing agent trades trigger a one-hour entry cooldown. At least five recent closed trades with win rate below 40% tightens the RSI entry filter. Limits fail closed if the broker's minimum lot exceeds 0.01, quotes are stale, algorithmic trading is disabled, or the broker does not allow both directions. Pausing the runner stops new entries and strategy exits; any already-open broker position remains at MT5 with server-side SL/TP until a stop/target fills or the user closes it. Gaps can still cause losses beyond the planned stop.
+- Trade-history adaptation is a small, deterministic guardrail—not an LLM and not model training on every two-second tick. A loss-free or profitable strategy cannot be guaranteed. Gaps, slippage, rejected stops, and execution outages can still cause losses; stop orders are not a guarantee of fill price. Test on MT5 Demo first.
+- Add/withdraw buttons adjust **only the local virtual Paper balance** and leave an audit ledger. Real brokerage deposits/withdrawals must be done through the broker; this app has no cash-transfer function.
+- The bot needs a trading-enabled MT5 password to send broker orders. The investor password remains read-only. Saved credentials use Electron `safeStorage` backed by Windows DPAPI. Never send credentials in chat.
+
+## Market analysis and internet reference
+
+- The chart, quotes, account details, positions, and deal history come from the connected MT5 terminal.
+- The rule analyzer needs at least 50 broker bars. It is technical analysis, not a prediction or guarantee.
+- The internet checker requests AUD/CAD from the public Frankfurter API (`https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD`) on demand or every 15 minutes. It validates response schema, publication date, and positive rate. Its globe animates while the agent is running and uses the last observed validation speed. This is a daily reference value—not a synchronized live quote, trading signal, web crawler, or self-training AI.
 
 ## Windows setup
 
-1. Install the official MetaTrader 5 desktop terminal and verify an account there. For a MetaQuotes demo account, use the exact server shown in that terminal.
+1. Install the official MetaTrader 5 desktop terminal, then verify the desired demo/live login and server inside MT5.
 2. Install Money Work from the Windows installer release.
-3. Choose **Add MT5 account** and enter the login, exact server, and password. For read-only access, use the investor password if available. The bridge can read balance/equity, symbols, bars, positions, deal history, and quotes; it cannot place orders.
-4. Select the broker's AUDCAD symbol (including a suffix such as `AUDCAD+` where applicable). Start the internet checker or paper simulator from **Agents** as desired.
+3. Connect using the login, exact server, and the appropriate MT5 password. Use an investor password for viewing only; use a trading-enabled password only if you intend to arm automated execution.
+4. Select the broker's AUDCAD symbol (including suffixes such as `AUDCAD+`). In **Agents**, configure the schedule and choose Paper or MT5 execution. Start on Demo. Live execution remains separately gated and requires typing `LIVE` after every pause/restart.
 
-If **Remember on this PC** is selected, credentials are encrypted with Electron `safeStorage` backed by Windows DPAPI. Otherwise the password is passed only to the local connector for the current session. Do not send account credentials in chat or screenshots.
+The browser preview cannot access the local MT5 terminal or execute broker trades; MT5 execution is only available in the installed Windows app. Money Work does not place trades until the runner is explicitly started.
 
 ## Development and tests
 
@@ -25,16 +34,6 @@ npm test
 npm run dev
 ```
 
-To build the read-only MT5 bridge and launch the desktop app on Windows:
+`npm test` runs frontend-rule tests and Python unit tests covering volume/risk policy and mocked broker execution, including live confirmation, stops/targets, stale prices, manual-position conflicts, spread limits, daily loss stops, and adaptive cooldowns. These tests do not connect to a personal brokerage account.
 
-```powershell
-py -m pip install MetaTrader5 pyinstaller numpy
-pyinstaller --clean --noconfirm --onefile --collect-all MetaTrader5 --collect-all numpy --collect-submodules numpy --hidden-import=numpy._core._multiarray_umath --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
-npm run electron:dev
-```
-
-For an installer, build the bridge first and run `npm run dist:win`. GitHub Actions additionally runs agent unit tests, checks that the packaged connector returns a successful status response, builds the Windows installer, and verifies that the connector is included before publishing.
-
-## Safety boundary
-
-Money Work remains read-only with respect to MT5. Paper trading only creates virtual records inside the app. The automated simulator is off until explicitly started, follows the configured weekday/time window, and pauses after restart. No real-money autonomous trading, order execution, LLM/AI model integration, or general web crawling is included. The browser preview cannot access the user's local MT5 terminal; the connector runs in the installed Windows desktop app.
+To build the Windows bridge and installer, GitHub Actions bundles MetaTrader5/NumPy, runs the MT5 connector import smoke test, unit tests, checks the public AUD/CAD endpoint, builds the installer, and verifies the connector is inside it before publishing.

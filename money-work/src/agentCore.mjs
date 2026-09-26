@@ -98,6 +98,21 @@ export function advancePaperAgent(state, { signal, price, quoteTime, symbol, set
   return state;
 }
 
+export function adjustVirtualBalance(state, direction, amount, now = new Date()) {
+  const value = Number(amount);
+  const adjustment = Number(direction);
+  if (![1, -1].includes(adjustment) || !Number.isFinite(value) || value <= 0 || value > 1000000) {
+    return { ok: false, code: 'invalid_amount' };
+  }
+  if (adjustment < 0 && value > Number(state.capital) - Number(state.position?.allocation || 0)) {
+    return { ok: false, code: 'reserved_funds' };
+  }
+  const nextCapital = Number(state.capital) + adjustment * value;
+  if (nextCapital < 0 || nextCapital > 10000000) return { ok: false, code: 'balance_limit' };
+  const entry = { id: `${now.getTime()}-${adjustment}`, type: adjustment > 0 ? 'deposit' : 'withdrawal', amount: adjustment * value, balanceAfter: nextCapital, time: now.toISOString() };
+  return { ok: true, state: { ...state, capital: nextCapital, cashFlows: [entry, ...(state.cashFlows || [])].slice(0, 50) }, entry };
+}
+
 export function computeRuleSignal(bars) {
   if (!Array.isArray(bars) || bars.length < 50) return 'WAIT';
   const closes = bars.map((bar) => Number(bar.close));

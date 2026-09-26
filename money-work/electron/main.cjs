@@ -227,6 +227,27 @@ ipcMain.handle('mt5:deals', async (_event, days) => {
   return result.deals || [];
 });
 
+ipcMain.handle('mt5:agent-evaluate', async (_event, payload) => {
+  if (!payload || !/^AUDCAD[A-Z0-9.+_-]*$/i.test(String(payload.symbol || ''))) {
+    throw new Error('The automatic agent is restricted to the broker AUDCAD symbol.');
+  }
+  if (!['WATCH BUY', 'WATCH SELL', 'WAIT'].includes(payload.signal)) {
+    throw new Error('Invalid market signal for the automatic agent.');
+  }
+  const rsi = Number(payload.rsi);
+  if (!Number.isFinite(rsi) || rsi < 0 || rsi > 100) throw new Error('Invalid RSI value.');
+  const schedule = payload.schedule || {};
+  const days = Array.isArray(schedule.days) ? schedule.days.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6) : [];
+  const result = await bridgeRequest('agent_evaluate', {
+    symbol: String(payload.symbol),
+    signal: payload.signal,
+    rsi,
+    liveConfirmed: payload.liveConfirmed === true,
+    schedule: { start: String(schedule.start || ''), end: String(schedule.end || ''), days },
+  }, 20000);
+  return result.result;
+});
+
 app.whenReady().then(createWindow);
 app.on('before-quit', () => {
   try { if (bridge && bridge.exitCode === null) bridge.kill(); } catch (_) { /* best-effort cleanup */ }

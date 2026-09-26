@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advancePaperAgent, computeRuleSignal, isInsideSchedule, validateReferencePayload } from '../src/agentCore.mjs';
+import { adjustVirtualBalance, advancePaperAgent, computeRuleSignal, isInsideSchedule, validateReferencePayload } from '../src/agentCore.mjs';
 
 test('schedule follows selected local weekdays and inclusive start/exclusive end', () => {
   const mondayMorning = new Date(2026, 8, 28, 9, 0);
@@ -38,6 +38,20 @@ test('paper agent opens within configured hours, closes on opposite signal and r
   assert.equal(closed.position, null);
   assert.ok(Math.abs(closed.realizedPnl - (1000 / 0.9) * 0.01) < 1e-8);
   assert.equal(closed.trades[0].status, 'closed');
+});
+
+test('virtual deposits and withdrawals create an auditable local balance ledger', () => {
+  const now = new Date('2026-09-26T12:00:00Z');
+  const initial = { capital: 1000, cashFlows: [], position: { allocation: 200 } };
+  const deposited = adjustVirtualBalance(initial, 1, 250, now);
+  assert.equal(deposited.ok, true);
+  assert.equal(deposited.state.capital, 1250);
+  const withdrawn = adjustVirtualBalance(deposited.state, -1, 300, now);
+  assert.equal(withdrawn.ok, true);
+  assert.equal(withdrawn.state.capital, 950);
+  assert.equal(withdrawn.state.cashFlows.length, 2);
+  assert.equal(adjustVirtualBalance(initial, -1, 900, now).code, 'reserved_funds');
+  assert.equal(adjustVirtualBalance(initial, 1, 0, now).code, 'invalid_amount');
 });
 
 test('rule analyzer refuses inadequate or invalid data', () => {
