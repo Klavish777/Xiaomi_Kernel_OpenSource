@@ -204,8 +204,9 @@ class Companion(tk.Tk):
         self.resource_states = {}
         cards = ttk.Frame(self.resources_tab)
         cards.pack(fill="both", expand=True)
-        cards.columnconfigure((0, 1), weight=1)
-        cards.rowconfigure((0, 1), weight=1)
+        for index in range(2):
+            cards.columnconfigure(index, weight=1)
+            cards.rowconfigure(index, weight=1)
         labels = {"cpu": "CPU", "gpu": "GPU", "ram": "RAM", "disk": "HDD + SSD"}
         help_text = {
             "cpu": "Ядра/потоки; для авто-параллельности команда может содержать {cpu_threads}.",
@@ -220,17 +221,25 @@ class Companion(tk.Tk):
             gauge = ResourceGauge(card, labels[key])
             gauge.pack(pady=(2, 0))
             self.resource_gauges[key] = gauge
-            check = ttk.Checkbutton(card, text=f"Подключить {labels[key]}", variable=self.resource_vars[key], command=self._save_resource_options)
+            check = ttk.Checkbutton(card, text=f"Мониторить {labels[key]}", variable=self.resource_vars[key], command=self._save_resource_options)
             check.pack(pady=(0, 3))
             state = ttk.Label(card, text=help_text[key], wraplength=310, justify="center", foreground="#526174")
             state.pack(fill="x", padx=6, pady=(0, 4))
             self.resource_states[key] = state
+        actions = ttk.LabelFrame(self.resources_tab, text="Доступ для локальной сборки в WSL2", padding=8)
+        actions.pack(fill="x", pady=(4, 6))
+        ttk.Button(actions, text="Подключить CPU + RAM", command=self.apply_wsl_profile).pack(side="left", padx=3)
+        ttk.Button(actions, text="Вернуть прежние настройки WSL", command=self.restore_wsl_profile).pack(side="left", padx=3)
+        ttk.Button(actions, text="Проверить GPU в WSL", command=self.check_wsl_gpu).pack(side="left", padx=3)
+        ttk.Button(actions, text="Проверить доступ к папке проекта", command=self.check_wsl_project_access).pack(side="left", padx=3)
+        self.resource_action_status = ttk.Label(self.resources_tab, text="Доступ к CPU/RAM настраивается для WSL2 целиком; GPU и проект проверяются отдельно.", wraplength=820)
+        self.resource_action_status.pack(anchor="w", pady=(0, 4))
         ttk.Label(
             self.resources_tab,
-            text="Примечание: приложение не может физически выделить или отключить компоненты ПК. Переключатели включают/отключают мониторинг; Windows и WSL управляют доступом к ресурсам.",
+            text="WSL получает лимиты, а не эксклюзивную резервацию устройств. Применение CPU/RAM меняет пользовательский .wslconfig; перезапуск WSL остановит все работающие WSL-сессии. GPU passthrough зависит от драйвера, а Windows-диски доступны через /mnt.",
             wraplength=820,
             foreground="#76551b",
-        ).pack(anchor="w", pady=(8, 0))
+        ).pack(anchor="w", pady=(4, 0))
 
     def _save_resource_options(self):
         self.settings.update({f"monitor_{key}": var.get() for key, var in self.resource_vars.items()})
@@ -241,7 +250,112 @@ class Companion(tk.Tk):
             saved["api_key"] = protect_secret(self.api_key_var.get().strip())
             CONFIG_FILE.write_text(json.dumps(saved, indent=2, ensure_ascii=False), encoding="utf-8")
         except OSError as exc:
-            self._append(self.build_log, f"Не удалось сохранить настройки ресурсов: {exc}\\n")
+            self._append(self.build_log, f"Не удалось сохранить настройки ресурсов: {exc}\n")
+
+    def _wsl_config_paths(self):
+        return Path.home() / ".wslconfig", APP_DIR / "wslconfig-backup.json"
+
+    @staticmethod
+    def _merge_wsl2_settings(text: str, values: dict[str, str]) -> str:
+        lines = text.splitlines()
+        section_start = next((i for i, line in enumerate(lines) if line.strip().lower() == "[wsl2]"), None)
+        if section_start is None:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append("[wsl2]")
+            section_start = len(lines) - 1
+        section_end = next((i for i in range(section_start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
+        seen = set()
+        for i in range(section_start + 1, section_end):
+            stripped = lines[i].strip()
+            if "=" not in stripped or stripped.startswith((";", "#")):
+                continue
+            key = stripped.split("=", 1)[0].strip().lower()
+            if key in values:
+                lines[i] = f"{key}={values[key]}"
+                seen.add(key)
+        additions = [f"{key}={value}" for key, value in values.items() if key not in seen]
+        lines[section_end:section_end] = additions
+        return "\n".join(lines).rstrip() + "\n"
+
+    def apply_wsl_profile(self):
+        config_path, backup_path = self._wsl_config_paths()
+        try:
+            original_exists = config_path.exists()
+            original = config_path.read_text(encoding="utf-8") if original_exists else ""
+            if not backup_path.exists():
+                APP_DIR.mkdir(parents=True, exist_ok=True)
+                backup_path.write_text(json.dumps({"existed": original_exists, "content": original}, ensure_ascii=False), encoding="utf-8")
+            total_gb = psutil.virtual_memory().total / (1024 ** 3)
+            reserve_gb = min(4, max(2, round(total_gb * 0.2)))
+            memory_gb = max(2, int(total_gb - reserve_gb))
+            processors = psutil.cpu_count(logical=True) or 1
+            updated = self._merge_wsl2_settings(original, {"processors": str(processors), "memory": f"{memory_gb}GB"})
+            config_path.write_text(updated, encoding="utf-8")
+            choice = messagebox.askyesnocancel(
+                "Настройки WSL2 сохранены",
+                f"Для WSL2 настроено до {processors} логических потоков и {memory_gb} ГБ RAM.\n\n"
+                "Да — сейчас выполнить wsl --shutdown (остановятся все WSL-дистрибутивы).\n"
+                "Нет — применить при следующем ручном запуске WSL.\n"
+                "Отмена — оставить настройки сохранёнными без перезапуска.",
+            )
+            if choice is True:
+                result = subprocess.run(["wsl.exe", "--shutdown"], capture_output=True, text=True, timeout=30)
+                if result.returncode:
+                    raise RuntimeError(result.stderr.strip() or "wsl --shutdown завершился с ошибкой")
+                self.resource_action_status.configure(text=f"Профиль применён: {processors} потоков, до {memory_gb} ГБ RAM. WSL остановлен и перезапустится с новыми лимитами.")
+            else:
+                self.resource_action_status.configure(text=f"Профиль сохранён в {config_path}; он заработает при следующем полном перезапуске WSL.")
+        except Exception as exc:
+            messagebox.showerror("Не удалось подключить CPU/RAM к WSL2", str(exc))
+
+    def restore_wsl_profile(self):
+        config_path, backup_path = self._wsl_config_paths()
+        if not backup_path.exists():
+            messagebox.showinfo("Настройки WSL2", "Резервная копия исходного .wslconfig не найдена; приложение ещё не меняло настройки WSL.")
+            return
+        if not messagebox.askyesno("Восстановить настройки WSL2", "Вернуть .wslconfig к состоянию до подключения ресурсов и остановить все WSL-сессии?"):
+            return
+        try:
+            backup = json.loads(backup_path.read_text(encoding="utf-8"))
+            if backup.get("existed"):
+                config_path.write_text(backup.get("content", ""), encoding="utf-8")
+            elif config_path.exists():
+                config_path.unlink()
+            backup_path.unlink(missing_ok=True)
+            result = subprocess.run(["wsl.exe", "--shutdown"], capture_output=True, text=True, timeout=30)
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip() or "wsl --shutdown завершился с ошибкой")
+            self.resource_action_status.configure(text="Исходный .wslconfig восстановлен; WSL остановлен и будет запущен со старыми настройками.")
+        except Exception as exc:
+            messagebox.showerror("Не удалось восстановить настройки WSL2", str(exc))
+
+    def check_wsl_gpu(self):
+        distro = self.vars["wsl_distro"].get().strip() or "Ubuntu"
+        try:
+            result = subprocess.run(["wsl.exe", "-d", distro, "--", "nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                                    capture_output=True, text=True, timeout=15)
+            if result.returncode == 0 and result.stdout.strip():
+                self.resource_action_status.configure(text="GPU доступен из WSL: " + result.stdout.strip().replace("\n", ", "))
+            else:
+                detail = result.stderr.strip() or "nvidia-smi не найден в WSL. Требуется совместимый NVIDIA-драйвер и WSL2."
+                self.resource_action_status.configure(text="GPU пока недоступен в WSL: " + detail[:240])
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.resource_action_status.configure(text=f"Не удалось проверить GPU в WSL: {exc}")
+
+    def check_wsl_project_access(self):
+        try:
+            project = self._project()
+            distro = self.vars["wsl_distro"].get().strip() or "Ubuntu"
+            wsl_path = subprocess.run(["wsl.exe", "-d", distro, "--", "wslpath", "-a", "-u", project],
+                                      check=True, capture_output=True, text=True, timeout=15).stdout.strip()
+            check = subprocess.run(["wsl.exe", "-d", distro, "--", "test", "-d", wsl_path], timeout=15)
+            if check.returncode == 0:
+                self.resource_action_status.configure(text=f"Папка проекта доступна в WSL как {wsl_path}")
+            else:
+                self.resource_action_status.configure(text=f"WSL не видит папку {wsl_path}; проверьте монтирование Windows-дисков.")
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            messagebox.showerror("Нет доступа к папке проекта", str(exc))
 
     def update_resource_monitor(self):
         try:
