@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-installer:
@@ -39,7 +39,21 @@ jobs:
         run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss'
         shell: pwsh
 
-      - name: Upload installer
+      - name: Publish downloadable installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "windows-companion-v0.1.0"
+          $installer = "windows-companion/dist-installer/XiaomiKernelCompanion-Setup.exe"
+          $existing = gh release list --json tagName --jq '.[].tagName' | Where-Object { $_ -eq $tag }
+          if ($existing) {
+            gh release upload $tag $installer --clobber
+          } else {
+            gh release create $tag $installer --title "Xiaomi Kernel Companion v0.1.0" --notes "Windows installer for Xiaomi Kernel Companion." --prerelease
+          }
+
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: XiaomiKernelCompanion-Windows-Installer
