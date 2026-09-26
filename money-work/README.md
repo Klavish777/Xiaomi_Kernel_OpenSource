@@ -2,7 +2,7 @@
 
 Windows desktop dashboard prototype for a **read-only MetaTrader 5** connection, including demo accounts. When connected, it reads account equity, broker instruments, bars, open positions, deal history and selected quotes (polled once per second). The app has **no order placement or autonomous trading endpoint** in this version.
 
-No fictional market prices, positions or trade history are shown in the functional views. Market analysis is a deterministic EMA/RSI readout derived from the selected MT5 bars—not a predictive AI model. This update adds a MetaQuotes-Demo preset, recently used server suggestions, instructions to search the terminal’s live broker directory, and a guided demo-registration flow. It also includes connector crash diagnostics; the standalone bridge is bundled in the installer. and makes the Markets, Positions, History, and Strategies views functional; Markets load from the connected broker catalog, while open positions and deal history are read from MT5. The dashboard is simplified, and the technical analyzer sits beside a clearly disabled autonomous-agent panel. It also keeps the Russian/English selector, fullscreen controls (F11 toggles; Esc exits fullscreen), and MT5 demo/live account identification. The browser preview does not have access to a local MT5 terminal—the connector works in the installed Windows desktop app.
+No fictional market prices, positions or trade history are shown in the functional views. Market analysis is a deterministic EMA/RSI readout derived from the selected MT5 bars—not a predictive AI model. This update fixes packaging of NumPy’s native runtime dependencies required by the MetaTrader5 Python module. Windows CI now launches the packaged connector and verifies a successful status response before building the installer. It also retains the MetaQuotes-Demo preset, recent server suggestions, broker search guidance and demo-registration flow. and makes the Markets, Positions, History, and Strategies views functional; Markets load from the connected broker catalog, while open positions and deal history are read from MT5. The dashboard is simplified, and the technical analyzer sits beside a clearly disabled autonomous-agent panel. It also keeps the Russian/English selector, fullscreen controls (F11 toggles; Esc exits fullscreen), and MT5 demo/live account identification. The browser preview does not have access to a local MT5 terminal—the connector works in the installed Windows desktop app.
 
 ## Windows setup
 
@@ -25,7 +25,7 @@ To build the read-only MT5 bridge and launch the desktop UI on Windows:
 
 ```powershell
 py -m pip install MetaTrader5 pyinstaller
-pyinstaller --clean --noconfirm --onefile --collect-all MetaTrader5 --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
+pyinstaller --clean --noconfirm --onefile --collect-all MetaTrader5 --collect-all numpy --collect-submodules numpy --hidden-import=numpy._core._multiarray_umath --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
 npm run electron:dev
 ```
 
