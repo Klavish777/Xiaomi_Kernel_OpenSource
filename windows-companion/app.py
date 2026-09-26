@@ -6,6 +6,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import tkinter as tk
 import urllib.error
@@ -15,7 +16,15 @@ from tkinter import filedialog, messagebox, ttk
 
 import psutil
 
-APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "XiaomiKernelCompanion"
+APP_NAME = "Project"
+APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+try:
+    APP_VERSION = (APP_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+except OSError:
+    APP_VERSION = "0.1.1"
+USER_DATA_ROOT = Path(os.getenv("APPDATA", str(Path.home())))
+APP_DIR = USER_DATA_ROOT / APP_NAME
+LEGACY_APP_DIR = USER_DATA_ROOT / "XiaomiKernelCompanion"
 CONFIG_FILE = APP_DIR / "settings.json"
 BRANCH = "arena/01a0dce0-xiaomi-kernel-opensource"
 DEFAULTS = {
@@ -53,7 +62,7 @@ def protect_secret(value: str) -> str:
                       ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD,
                       ctypes.POINTER(DATA_BLOB)]
     crypt.restype = wintypes.BOOL
-    if not crypt(ctypes.byref(source), "Xiaomi Kernel Companion", None, None, None, 0, ctypes.byref(target)):
+    if not crypt(ctypes.byref(source), "Project", None, None, None, 0, ctypes.byref(target)):
         raise OSError("Windows DPAPI could not protect the API key")
     try:
         data = ctypes.string_at(target.pbData, target.cbData)
@@ -90,6 +99,15 @@ def unprotect_secret(value: str) -> str:
 
 def load_settings() -> dict:
     settings = DEFAULTS.copy()
+    if not CONFIG_FILE.exists() and LEGACY_APP_DIR.exists():
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            for item in LEGACY_APP_DIR.iterdir():
+                target = APP_DIR / item.name
+                if item.is_file() and not target.exists():
+                    shutil.copy2(item, target)
+        except OSError:
+            pass
     try:
         stored = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         settings.update({k: v for k, v in stored.items() if k in settings})
@@ -131,7 +149,7 @@ class ResourceGauge(tk.Canvas):
 class Companion(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Xiaomi Kernel Companion")
+        self.title(f"{APP_NAME} v{APP_VERSION}")
         self.geometry("920x700")
         self.minsize(760, 560)
         self.settings = load_settings()
@@ -151,7 +169,7 @@ class Companion(tk.Tk):
             pass
         header = ttk.Frame(self, padding=(16, 12))
         header.pack(fill="x")
-        ttk.Label(header, text="Xiaomi Kernel Companion", font=("Segoe UI", 18, "bold")).pack(side="left")
+        ttk.Label(header, text=f"{APP_NAME}  v{APP_VERSION}", font=("Segoe UI", 18, "bold")).pack(side="left")
         ttk.Label(header, text="Локальная сборка · GitHub · ИИ API", foreground="#526174").pack(side="right", pady=7)
 
         self.tabs = ttk.Notebook(self)

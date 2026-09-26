@@ -1,17 +1,19 @@
-#define AppName "Xiaomi Kernel Companion"
-#define AppVersion "0.1.0"
-#define AppExeName "XiaomiKernelCompanion.exe"
+#define AppName "Project"
+#ifndef AppVersion
+  #define AppVersion "0.1.1"
+#endif
+#define AppExeName "Project.exe"
 
 [Setup]
 AppId={{A02C7D08-79D8-4A2D-AF2E-0F385B791B44}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Arena.ai
-DefaultDirName={autopf}\Xiaomi Kernel Companion
+DefaultDirName={autopf}\Project
 DefaultGroupName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
 OutputDir=dist-installer
-OutputBaseFilename=XiaomiKernelCompanion-Setup
+OutputBaseFilename=Project-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
