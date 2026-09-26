@@ -29,7 +29,7 @@ const copy = {
     'Demo win rate': 'Demo win rate', 'Demo max drawdown': 'Demo max drawdown',
     'AI market read': 'AI market read', 'Favorite instruments': 'Favorite instruments', 'Paper trades': 'Paper trades',
     'Demo positions': 'Demo positions', 'Strategy runner': 'Strategy runner', 'Start paper simulation': 'Start paper simulation',
-    'Pause demo': 'Pause demo', 'Connect read-only': 'Connect read-only', 'Add Bybit MT5 account': 'Add Bybit MT5 account',
+    'Pause demo': 'Pause demo', 'Connect read-only': 'Connect read-only',
     'MT5 demo account': 'MT5 demo account', 'MT5 live account': 'MT5 live account', 'Language': 'Language',
     'Fullscreen': 'Fullscreen', 'Windowed': 'Windowed', 'DEMO ACCOUNT': 'DEMO ACCOUNT', 'LIVE ACCOUNT': 'LIVE ACCOUNT',
   },
@@ -43,7 +43,7 @@ const copy = {
     'Demo win rate': 'Доля прибыльных демо-сделок', 'Demo max drawdown': 'Максимальная демо-просадка',
     'AI market read': 'Анализ рынка ИИ', 'Favorite instruments': 'Избранные инструменты', 'Paper trades': 'Симулированные сделки',
     'Demo positions': 'Демо-позиции', 'Strategy runner': 'Запуск стратегии', 'Start paper simulation': 'Запустить симуляцию',
-    'Pause demo': 'Приостановить демо', 'Connect read-only': 'Подключить для чтения', 'Add Bybit MT5 account': 'Добавить счёт Bybit MT5',
+    'Pause demo': 'Приостановить демо', 'Connect read-only': 'Подключить для чтения',
     'MT5 demo account': 'Демо-счёт MT5', 'MT5 live account': 'Реальный счёт MT5', 'Language': 'Язык',
     'Fullscreen': 'Полный экран', 'Windowed': 'Оконный режим', 'DEMO ACCOUNT': 'ДЕМО-СЧЁТ', 'LIVE ACCOUNT': 'РЕАЛЬНЫЙ СЧЁТ',
   },
@@ -428,13 +428,13 @@ function App() {
           <div className="modal-icon"><LockKeyhole size={20} /></div>
           {modal === 'connect' ? <>
             <span className="section-kicker">READ-ONLY MT5 CONNECTION</span>
-            <h2>{mt5Account ? 'Account connected' : t('Add Bybit MT5 account')}</h2>
+            <h2>{mt5Account ? 'Account connected' : t('Add MT5 account')}</h2>
             {mt5Account ? <>
               <p>Connected to <strong>{mt5Account.server}</strong> as account <strong>{mt5Account.login}</strong>. Money Work reads equity and quotes only; no orders can be sent.</p>
               <div className="account-summary"><span>Equity</span><strong>{mt5Account.currency} {Number(mt5Account.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><span>Leverage</span><strong>1:{mt5Account.leverage}</strong></div>
               <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>Close</button><button className="modal-danger" onClick={disconnectAccount}>Disconnect</button></div>
             </> : <>
-              <p>Use the MT5 account login, password, and exact server shown in MetaTrader 5. Demo accounts are supported: use your demo login and demo server. For Bybit CFD this is the MT5 account, not your Bybit website password. Credentials stay in the local read-only connector.</p>
+              <p>Enter the MT5 account login, password, and exact server shown in MetaTrader 5. MetaQuotes-Demo accounts are supported. For a read-only connection, use the investor password if available. Credentials are passed only to the local MT5 connector.</p>
               <form className="account-form" onSubmit={connectAccount}>
                 <label>MT5 account number<input autoComplete="username" inputMode="numeric" value={accountForm.login} onChange={(event) => setAccountForm({ ...accountForm, login: event.target.value })} placeholder="Account login" required /></label>
                 <label>MT5 server<input value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="Exact demo or live server shown in MT5" required /></label>
