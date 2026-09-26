@@ -60,13 +60,25 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
         id: version
 
-      - name: Test agent scheduling, adaptive safeguards, virtual cash, and mocked MT5 orders
+      - name: Install app dependencies for tests
         working-directory: money-work
         run: |
           npm ci
           if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
-          npm test
-          if ($LASTEXITCODE -ne 0) { throw "Money Work agent tests failed" }
+        shell: pwsh
+
+      - name: Run JavaScript agent tests
+        working-directory: money-work
+        run: |
+          npm run test:js
+          if ($LASTEXITCODE -ne 0) { throw "Money Work JavaScript tests failed" }
+        shell: pwsh
+
+      - name: Run Python trading-risk and mocked MT5 order tests
+        working-directory: money-work
+        run: |
+          python -m unittest discover -s tests -p "test_*.py" -v
+          if ($LASTEXITCODE -ne 0) { throw "Money Work Python bridge/risk tests failed" }
         shell: pwsh
 
       - name: Verify public AUD/CAD reference endpoint
