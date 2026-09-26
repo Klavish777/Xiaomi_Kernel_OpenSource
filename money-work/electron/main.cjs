@@ -7,6 +7,7 @@ let mainWindow;
 let bridge;
 let nextRequestId = 1;
 let stdoutBuffer = '';
+let bridgeDiagnostic = '';
 const pending = new Map();
 const accountFile = () => path.join(app.getPath('userData'), 'mt5-account.bin');
 
@@ -39,6 +40,7 @@ function startBridge() {
   }
   bridge = spawn(bridgePath, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   stdoutBuffer = '';
+  bridgeDiagnostic = '';
   bridge.stdout.setEncoding('utf8');
   bridge.stdout.on('data', (chunk) => {
     stdoutBuffer += chunk;
@@ -57,23 +59,35 @@ function startBridge() {
             else entry.reject(new Error(message.message || 'MT5 connector request failed.'));
           }
         } else {
+          if (['fatal', 'error', 'warning'].includes(message.type) && message.message) {
+            bridgeDiagnostic = String(message.message).slice(-1200);
+          }
           sendEvent(message);
         }
       } catch (error) {
-        sendEvent({ type: 'warning', message: `Could not read MT5 connector output: ${error.message}` });
+        bridgeDiagnostic = `Invalid connector output: ${error.message}`;
+        sendEvent({ type: 'warning', message: bridgeDiagnostic });
       }
     }
   });
   bridge.stderr.setEncoding('utf8');
-  bridge.stderr.on('data', (text) => sendEvent({ type: 'log', message: text.trim() }));
+  bridge.stderr.on('data', (text) => {
+    const detail = String(text).trim();
+    if (detail) bridgeDiagnostic = `${bridgeDiagnostic} ${detail}`.trim().slice(-1200);
+    if (detail) sendEvent({ type: 'log', message: detail });
+  });
   bridge.on('error', (error) => {
-    sendEvent({ type: 'error', message: `Could not start MT5 connector: ${error.message}` });
-    rejectPending(error.message);
+    bridgeDiagnostic = `Could not start MT5 connector: ${error.message}`;
+    sendEvent({ type: 'error', message: bridgeDiagnostic });
+    rejectPending(bridgeDiagnostic);
     bridge = null;
   });
   bridge.on('exit', (code) => {
-    if (code !== 0 && code !== null) sendEvent({ type: 'error', message: `MT5 connector stopped (code ${code}).` });
-    rejectPending('MT5 connector stopped.');
+    const stoppedMessage = bridgeDiagnostic
+      ? `MT5 connector stopped (code ${code ?? 'unknown'}): ${bridgeDiagnostic}`
+      : `MT5 connector stopped unexpectedly (code ${code ?? 'unknown'}). Confirm the 64-bit MetaTrader 5 desktop terminal is installed on this PC, then retry.`;
+    if (code !== 0 || bridgeDiagnostic) sendEvent({ type: 'error', message: stoppedMessage });
+    rejectPending(stoppedMessage);
     bridge = null;
   });
   return bridge;

@@ -74,7 +74,7 @@ jobs:
           if ($existing) {
             gh release upload $tag $installer --clobber
           } else {
-            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION includes generic MetaTrader 5 demo/live connection labels and the bundled read-only MT5 connector." --prerelease
+            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION includes improved MT5 connector diagnostics and the bundled read-only MetaTrader 5 connector." --prerelease
           }
 
       - name: Upload installer artifact
