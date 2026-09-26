@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import queue
+import shutil
 import subprocess
 import threading
 import tkinter as tk
@@ -11,6 +12,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+
+import psutil
 
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "XiaomiKernelCompanion"
 CONFIG_FILE = APP_DIR / "settings.json"
@@ -22,6 +25,10 @@ DEFAULTS = {
     "api_base": "https://api.openai.com/v1",
     "api_model": "",
     "api_key": "",
+    "monitor_cpu": True,
+    "monitor_gpu": True,
+    "monitor_ram": True,
+    "monitor_disk": True,
 }
 
 
@@ -92,6 +99,35 @@ def load_settings() -> dict:
     return settings
 
 
+class ResourceGauge(tk.Canvas):
+    def __init__(self, parent, title: str):
+        super().__init__(parent, width=190, height=190, bg="#ffffff", highlightthickness=0)
+        self.title = title
+        self.value = None
+        self.detail = "Отключено"
+        self.draw()
+
+    def draw(self):
+        self.delete("all")
+        x0, y0, x1, y1 = 24, 24, 166, 166
+        self.create_arc(x0, y0, x1, y1, start=135, extent=270, style="arc", outline="#e5eaf0", width=13)
+        if self.value is not None:
+            color = "#22a06b" if self.value < 70 else "#e49b25" if self.value < 90 else "#d64545"
+            self.create_arc(x0, y0, x1, y1, start=135, extent=270 * max(0, min(100, self.value)) / 100,
+                            style="arc", outline=color, width=13)
+            value_text = f"{self.value:.0f}%"
+        else:
+            value_text = "--"
+        self.create_text(95, 78, text=self.title, fill="#526174", font=("Segoe UI", 10, "bold"))
+        self.create_text(95, 108, text=value_text, fill="#172b4d", font=("Segoe UI", 22, "bold"))
+        self.create_text(95, 137, text=self.detail, fill="#526174", font=("Segoe UI", 8), width=135)
+
+    def set_reading(self, value, detail):
+        self.value = value
+        self.detail = detail
+        self.draw()
+
+
 class Companion(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -105,6 +141,7 @@ class Companion(tk.Tk):
         self._build_ui()
         self._load_fields()
         self.after(100, self._drain_events)
+        self.after(700, self.update_resource_monitor)
 
     def _build_ui(self):
         style = ttk.Style(self)
@@ -120,14 +157,17 @@ class Companion(tk.Tk):
         self.tabs = ttk.Notebook(self)
         self.tabs.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.build_tab = ttk.Frame(self.tabs, padding=14)
+        self.resources_tab = ttk.Frame(self.tabs, padding=14)
         self.sync_tab = ttk.Frame(self.tabs, padding=14)
         self.ai_tab = ttk.Frame(self.tabs, padding=14)
         self.settings_tab = ttk.Frame(self.tabs, padding=14)
         self.tabs.add(self.build_tab, text="Сборка локально")
+        self.tabs.add(self.resources_tab, text="Ресурсы")
         self.tabs.add(self.sync_tab, text="Синхронизация")
         self.tabs.add(self.ai_tab, text="ИИ-помощник")
         self.tabs.add(self.settings_tab, text="Настройки")
         self._build_build_tab()
+        self._build_resources_tab()
         self._build_sync_tab()
         self._build_ai_tab()
         self._build_settings_tab()
@@ -146,6 +186,126 @@ class Companion(tk.Tk):
         self.build_status.pack(side="right")
         self.build_log = self._text_area(self.build_tab, height=24)
         self.build_log.pack(fill="both", expand=True)
+
+    def _build_resources_tab(self):
+        ttk.Label(self.resources_tab, text="Мониторинг и подключение ресурсов ПК", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.resources_tab,
+            text="Кольцевые шкалы обновляются каждые 2 секунды. CPU/RAM/диск используются WSL автоматически; GPU показывается при наличии NVIDIA-драйвера и nvidia-smi.",
+            wraplength=820,
+        ).pack(anchor="w", pady=(5, 12))
+        self.resource_vars = {
+            "cpu": tk.BooleanVar(value=bool(self.settings.get("monitor_cpu", True))),
+            "gpu": tk.BooleanVar(value=bool(self.settings.get("monitor_gpu", True))),
+            "ram": tk.BooleanVar(value=bool(self.settings.get("monitor_ram", True))),
+            "disk": tk.BooleanVar(value=bool(self.settings.get("monitor_disk", True))),
+        }
+        self.resource_gauges = {}
+        self.resource_states = {}
+        cards = ttk.Frame(self.resources_tab)
+        cards.pack(fill="both", expand=True)
+        cards.columnconfigure((0, 1), weight=1)
+        cards.rowconfigure((0, 1), weight=1)
+        labels = {"cpu": "CPU", "gpu": "GPU", "ram": "RAM", "disk": "HDD + SSD"}
+        help_text = {
+            "cpu": "Ядра/потоки; для авто-параллельности команда может содержать {cpu_threads}.",
+            "gpu": "NVIDIA telemetry; GPU обычно не ускоряет компиляцию ядра.",
+            "ram": "Использование памяти Windows; лимит WSL задаётся отдельно.",
+            "disk": "Использование диска, где расположена папка проекта.",
+        }
+        for index, key in enumerate(("cpu", "gpu", "ram", "disk")):
+            row, column = divmod(index, 2)
+            card = ttk.LabelFrame(cards, text=labels[key], padding=8)
+            card.grid(row=row, column=column, sticky="nsew", padx=8, pady=8)
+            gauge = ResourceGauge(card, labels[key])
+            gauge.pack(pady=(2, 0))
+            self.resource_gauges[key] = gauge
+            check = ttk.Checkbutton(card, text=f"Подключить {labels[key]}", variable=self.resource_vars[key], command=self._save_resource_options)
+            check.pack(pady=(0, 3))
+            state = ttk.Label(card, text=help_text[key], wraplength=310, justify="center", foreground="#526174")
+            state.pack(fill="x", padx=6, pady=(0, 4))
+            self.resource_states[key] = state
+        ttk.Label(
+            self.resources_tab,
+            text="Примечание: приложение не может физически выделить или отключить компоненты ПК. Переключатели включают/отключают мониторинг; Windows и WSL управляют доступом к ресурсам.",
+            wraplength=820,
+            foreground="#76551b",
+        ).pack(anchor="w", pady=(8, 0))
+
+    def _save_resource_options(self):
+        self.settings.update({f"monitor_{key}": var.get() for key, var in self.resource_vars.items()})
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            saved = {key: var.get().strip() for key, var in self.vars.items()}
+            saved.update({f"monitor_{key}": var.get() for key, var in self.resource_vars.items()})
+            saved["api_key"] = protect_secret(self.api_key_var.get().strip())
+            CONFIG_FILE.write_text(json.dumps(saved, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            self._append(self.build_log, f"Не удалось сохранить настройки ресурсов: {exc}\\n")
+
+    def update_resource_monitor(self):
+        try:
+            self._update_resource_readings()
+        finally:
+            self.after(2000, self.update_resource_monitor)
+
+    def _update_resource_readings(self):
+        if not hasattr(self, "resource_gauges"):
+            return
+        if self.resource_vars["cpu"].get():
+            cpu = psutil.cpu_percent(interval=None)
+            count = psutil.cpu_count(logical=True) or 1
+            self.resource_gauges["cpu"].set_reading(cpu, f"{count} логических потоков")
+        else:
+            self.resource_gauges["cpu"].set_reading(None, "Отключено")
+
+        if self.resource_vars["ram"].get():
+            memory = psutil.virtual_memory()
+            used = (memory.total - memory.available) / (1024 ** 3)
+            total = memory.total / (1024 ** 3)
+            self.resource_gauges["ram"].set_reading(memory.percent, f"{used:.1f} / {total:.1f} ГБ")
+        else:
+            self.resource_gauges["ram"].set_reading(None, "Отключено")
+
+        if self.resource_vars["disk"].get():
+            path = self.vars["project_path"].get().strip() or str(Path.home())
+            try:
+                disk = psutil.disk_usage(path)
+            except (OSError, ValueError):
+                disk = psutil.disk_usage(str(Path.home()))
+                path = str(Path.home())
+            self.resource_gauges["disk"].set_reading(disk.percent, f"Свободно {disk.free / (1024 ** 3):.1f} ГБ · {path}")
+        else:
+            self.resource_gauges["disk"].set_reading(None, "Отключено")
+
+        if self.resource_vars["gpu"].get():
+            self._update_gpu_reading()
+        else:
+            self.resource_gauges["gpu"].set_reading(None, "Отключено")
+
+    def _update_gpu_reading(self):
+        executable = shutil.which("nvidia-smi")
+        if not executable:
+            self.resource_gauges["gpu"].set_reading(None, "NVIDIA GPU не обнаружен")
+            return
+        try:
+            result = subprocess.run(
+                [executable, "--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=2, check=True,
+            )
+            samples = []
+            for line in result.stdout.strip().splitlines():
+                fields = [field.strip() for field in line.split(",")]
+                if len(fields) >= 3 and all(field.replace(".", "", 1).isdigit() for field in fields[:3]):
+                    samples.append(tuple(float(field) for field in fields[:3]))
+            if not samples:
+                raise ValueError("nvidia-smi returned no GPU telemetry")
+            utilization = sum(sample[0] for sample in samples) / len(samples)
+            used = sum(sample[1] for sample in samples)
+            total = sum(sample[2] for sample in samples)
+            self.resource_gauges["gpu"].set_reading(utilization, f"VRAM {used:.0f} / {total:.0f} МБ")
+        except (OSError, subprocess.SubprocessError, ValueError):
+            self.resource_gauges["gpu"].set_reading(None, "Нет данных от nvidia-smi")
 
     def _build_sync_tab(self):
         ttk.Label(self.sync_tab, text="Синхронизация исходников через GitHub", font=("Segoe UI", 11, "bold")).pack(anchor="w")
@@ -225,6 +385,7 @@ class Companion(tk.Tk):
     def save_settings(self):
         APP_DIR.mkdir(parents=True, exist_ok=True)
         values = {key: var.get().strip() for key, var in self.vars.items()}
+        values.update({f"monitor_{key}": var.get() for key, var in self.resource_vars.items()})
         values["api_key"] = protect_secret(self.api_key_var.get().strip())
         CONFIG_FILE.write_text(json.dumps(values, indent=2, ensure_ascii=False), encoding="utf-8")
         self.settings.update({key: var.get().strip() for key, var in self.vars.items()})
@@ -273,6 +434,9 @@ class Companion(tk.Tk):
             project = self._project()
             command = self.vars["build_command"].get().strip()
             distro = self.vars["wsl_distro"].get().strip() or "Ubuntu"
+            if "{cpu_threads}" in command:
+                threads = (psutil.cpu_count(logical=True) or 1) if self.resource_vars["cpu"].get() else 1
+                command = command.replace("{cpu_threads}", str(threads))
             if not command:
                 raise ValueError("Задайте команду сборки в настройках, например make -j$(nproc).")
             wsl_path = subprocess.run(["wsl.exe", "-d", distro, "--", "wslpath", "-a", "-u", project],

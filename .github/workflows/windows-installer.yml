@@ -25,7 +25,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller
+        run: python -m pip install --upgrade pip pyinstaller psutil
 
       - name: Build standalone application
         working-directory: windows-companion
