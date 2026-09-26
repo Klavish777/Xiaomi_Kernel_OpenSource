@@ -7,7 +7,7 @@ import {
   Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
   Globe, Bot, Play, Pause, CircleCheck,
 } from 'lucide-react';
-import { adjustVirtualBalance, advancePaperAgent, validateReferencePayload } from './agentCore.mjs';
+import { adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, summarizePaperHistory, validateReferencePayload } from './agentCore.mjs';
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
@@ -274,6 +274,11 @@ function App() {
     const signal = trend === 'Bullish' && rsi < 70 ? 'WATCH BUY' : trend === 'Bearish' && rsi > 30 ? 'WATCH SELL' : 'WAIT';
     return { rsi, trend, signal, price: closes.at(-1), source: 'MT5 historical bars' };
   }, [liveBars, liveQuote]);
+  const analystConsensus = useMemo(() => {
+    const paperHistory = summarizePaperHistory(paperAgent.trades);
+    const learningStatus = executionMode === 'paper' ? paperHistory : brokerAgentStatus;
+    return buildAnalystConsensus({ analysis, quote: liveQuote, referenceData, brokerStatus: learningStatus });
+  }, [analysis, liveQuote, referenceData, brokerAgentStatus, paperAgent.trades, executionMode]);
 
   async function runInternetResearch() {
     if (researchBusy.current) return;
@@ -287,7 +292,7 @@ function App() {
       const payload = await response.json();
       const validated = validateReferencePayload(payload);
       if (!validated.valid) throw new Error('Reference data failed schema, date, or positive-rate checks.');
-      const result = { rate: validated.rate, sourceDate: validated.date, fetchedAt: new Date().toISOString(), source: 'Frankfurter / central-bank daily reference', checks: validated.checks };
+      const result = { base: 'AUD', rate: validated.rate, sourceDate: validated.date, fetchedAt: new Date().toISOString(), source: 'Frankfurter / central-bank daily reference', checks: validated.checks };
       setReferenceData(result);
       localStorage.setItem(REFERENCE_STORAGE_KEY, JSON.stringify(result));
       const elapsed = Math.max(250, performance.now() - startedAt);
@@ -330,8 +335,10 @@ function App() {
         rsi: analysis.rsi,
         liveConfirmed: liveTradeConfirmed,
         schedule: { start: paperAgent.start, end: paperAgent.end, days: paperAgent.days },
+        reference: referenceData,
       }).then((result) => {
-        setBrokerAgentStatus(result);
+        const consensus = buildAnalystConsensus({ analysis, quote: liveQuote, referenceData, brokerStatus: result });
+        setBrokerAgentStatus({ ...result, consensus });
         if (['position_opened', 'position_closed', 'daily_loss_stop'].includes(result.state)) {
           refreshPositionsNow();
           refreshDealsNow();
@@ -353,9 +360,10 @@ function App() {
       quoteTime,
       symbol: selectedSymbol,
       settings: { ...paperAgent, capital: Number(paperAgent.capital) + Number(paperAgent.realizedPnl || 0) },
+      allowEntry: analystConsensus.entryAllowed,
     });
     if (next !== paperAgent) setPaperAgent(next);
-  }, [paperAgent, liveQuote, analysis, selectedSymbol, executionMode, liveTradeConfirmed, mt5Account]);
+  }, [paperAgent, liveQuote, analysis, selectedSymbol, executionMode, liveTradeConfirmed, mt5Account, referenceData, analystConsensus]);
 
   async function refreshPositionsNow() {
     if (!window.moneyWork || !mt5Account) return;
@@ -472,12 +480,14 @@ function App() {
       }
     }
     setMt5Error('');
+    setResearchRunning(true);
     setPaperAgent((current) => ({ ...current, enabled: true }));
   }
 
   function confirmLiveAgent() {
     if (liveConfirmText.trim() !== 'LIVE') return;
     setLiveTradeConfirmed(true);
+    setResearchRunning(true);
     setPaperAgent((current) => ({ ...current, enabled: true }));
     setModal('');
   }
@@ -631,6 +641,15 @@ function App() {
                 </> : <div className="live-account-summary"><span>{l('Баланс MT5', 'MT5 balance')} <b>{mt5Account ? `${mt5Account.currency} ${Number(mt5Account.balance).toFixed(2)}` : '—'}</b></span><span>{l('Снятие/пополнение реального счёта выполняется только у брокера.', 'Real account deposits/withdrawals are handled by the broker.')}</span></div>}
                 <div className="schedule-inline"><label>{l('С', 'From')}<input type="time" value={paperAgent.start} onChange={(event) => setPaperAgent((current) => ({ ...current, start: event.target.value }))} /></label><label>{l('До', 'To')}<input type="time" value={paperAgent.end} onChange={(event) => setPaperAgent((current) => ({ ...current, end: event.target.value }))} /></label><div className="weekday-picker compact-weekdays"><span>{l('Дни ·', 'Days ·')} {Intl.DateTimeFormat().resolvedOptions().timeZone}</span><div>{(language === 'ru' ? ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] : ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']).map((label, day) => <button key={day} type="button" className={paperAgent.days.includes(day) ? 'selected' : ''} aria-pressed={paperAgent.days.includes(day)} onClick={() => setPaperAgent((current) => ({ ...current, days: current.days.includes(day) ? current.days.filter((item) => item !== day) : [...current.days, day].sort() }))}>{label}</button>)}</div></div></div>
                 <div className="paper-performance-grid compact-performance"><div><small>{executionMode === 'paper' ? l('P&L paper', 'Paper P&L') : l('P&L агента сегодня', 'Agent P&L today')}</small><strong className={Number(brokerAgentStatus?.dailyPnl ?? paperAgent.realizedPnl) >= 0 ? 'positive-text' : 'negative-text'}>{executionMode === 'paper' ? `${Number(paperAgent.realizedPnl || 0).toFixed(2)} CAD` : brokerAgentStatus?.dailyPnl !== undefined ? `${Number(brokerAgentStatus.dailyPnl).toFixed(2)} ${mt5Account?.currency || ''}` : '—'}</strong></div><div><small>{l('Сигнал', 'Signal')}</small><strong>{analysis?.signal || l('Нет данных', 'No data')}</strong></div><div><small>{executionMode === 'paper' ? l('Виртуальная позиция', 'Paper position') : l('Состояние агента', 'Agent status')}</small><strong>{executionMode === 'paper' ? (paperAgent.position ? `${paperAgent.position.side} AUDCAD` : l('Нет', 'None')) : (brokerAgentStatus?.state || l('Ожидание', 'Waiting'))}</strong></div></div>
+                <div className="analyst-consensus" aria-live="polite">
+                  <div className="analyst-consensus-heading"><strong>{l('СОГЛАСОВАННОЕ РЕШЕНИЕ', 'ANALYST CONSENSUS')}</strong><span className={analystConsensus.entryAllowed ? 'consensus-ready' : 'consensus-wait'}>{analystConsensus.entryAllowed ? `${l('ВХОД', 'ENTRY')} · ${analystConsensus.decision}` : `${l('ОЖИДАНИЕ', 'WAIT')} · ${analystConsensus.reason.replaceAll('_', ' ')}`}</span></div>
+                  <div className="analyst-status-grid">
+                    <span><b>{l('Техника', 'Technical')}</b><small>{analystConsensus.analysts.technical.ready ? analystConsensus.analysts.technical.signal : l('Нет сигнала', 'No directional signal')}</small></span>
+                    <span><b>{l('Интернет · дневной ориентир', 'Internet · daily reference')}</b><small>{analystConsensus.analysts.internet.ready ? `${Number(analystConsensus.analysts.internet.rate).toFixed(5)} · ${analystConsensus.analysts.internet.sourceDate}` : l(`Проверка нужна: ${analystConsensus.analysts.internet.reason}`, `Check needed: ${analystConsensus.analysts.internet.reason.replaceAll('_', ' ')}`)}</small></span>
+                    <span><b>{l('Адаптация', 'Adaptive/history')}</b><small>{analystConsensus.analysts.learning.state === 'warming_up' ? l('Сбор закрытых сделок', 'Collecting closed trades') : analystConsensus.analysts.learning.state === 'adaptive_filter' ? l('Фильтр входа ужесточён', 'Entry filter tightened') : analystConsensus.analysts.learning.state === 'learning_cooldown' ? l('Пауза после серии убытков', 'Loss-streak cooldown') : `${analystConsensus.analysts.learning.closedTrades} ${l('закрытых сделок', 'closed trades')}`}</small></span>
+                  </div>
+                  <small className="consensus-footnote">{l('Новая сделка требует всех трёх проверок. Дневной курс — только проверка источника, не live-котировка и не прогноз направления.', 'A new entry requires all three checks. The daily rate validates the source only; it is neither a live quote nor a directional forecast.')}</small>
+                </div>
                 {executionMode === 'mt5' && brokerAgentStatus && <div className={`broker-agent-message ${brokerAgentStatus.state === 'error' || brokerAgentStatus.state === 'daily_loss_stop' ? 'error-state' : ''}`}><span>{brokerAgentStatus.message || brokerAgentStatus.learning || l('Последний цикл', 'Last cycle') + ': ' + brokerAgentStatus.state}</span><small>{brokerAgentStatus.winRate === null || brokerAgentStatus.winRate === undefined ? l('Обучение: ожидаются закрытые сделки', 'Learning: waiting for closed trades') : `${l('Доля прибыльных закрытых сделок', 'Closed-trade win rate')}: ${(brokerAgentStatus.winRate * 100).toFixed(0)}% · ${brokerAgentStatus.closedTrades} ${l('сделок', 'trades')} · ${brokerAgentStatus.consecutiveLosses || 0} ${l('убытков подряд', 'losses in a row')}`}</small></div>}
                 <div className="agent-actions compact-agent-actions"><button className={paperAgent.enabled ? 'modal-danger' : 'modal-primary'} onClick={startOrPauseAgent}>{paperAgent.enabled ? <Pause size={14} /> : <Play size={14} />}{paperAgent.enabled ? l('ВЫКЛ · ПАУЗА', 'OFF · PAUSE') : executionMode === 'paper' ? l('ВКЛ · PAPER', 'ON · PAPER') : executionMode === 'mt5' && mt5Account?.accountType === 'real' ? l('ВКЛ · LIVE', 'ON · LIVE') : l('ВКЛ · MT5 DEMO', 'ON · MT5 DEMO')}</button><span className="agent-feed-status"><Activity size={14} /> {paperAgent.enabled ? l('Новый тик проверяется каждые 2 сек.', 'Fresh ticks evaluated every 2 sec.') : l('Стратегия: EMA(20/50) + RSI(14)', 'Strategy: EMA(20/50) + RSI(14)')}</span></div>
                 <p className="muted-copy compact-agent-note">{l('Адаптация использует только закрытые результаты: после 5 сделок с win rate <40% фильтр входа ужесточается; 2 убытка подряд дают паузу на 1 час. Это не обучение нейросети и не гарантия безубыточности. ОТКЛ останавливает новые входы, но не закрывает уже открытую брокером позицию: её SL/TP остаются у брокера. SL не гарантирует цену исполнения при гэпе/проскальзывании.', 'Adaptation uses closed outcomes only: after 5 trades below 40% win rate, entry filter tightens; 2 consecutive losses pause entries for 1 hour. This is not neural-network learning or a no-loss guarantee. OFF stops new entries but does not close an existing broker position; its SL/TP remain at the broker. A stop does not guarantee execution price through gaps or slippage.')}</p>

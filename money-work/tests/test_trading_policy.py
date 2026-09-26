@@ -15,6 +15,7 @@ from trading_policy import (
     loss_streak_cooldown,
     normalize_volume,
     pip_size,
+    reference_is_valid,
 )
 
 
@@ -41,6 +42,15 @@ class TradingPolicyTests(unittest.TestCase):
         self.assertTrue(daily_loss_exceeded(10000, -90, -10))
         self.assertTrue(daily_loss_exceeded(0, 0, 0))
         self.assertEqual(MAX_DAILY_LOSS_RATIO, 0.01)
+
+    def test_reference_gate_requires_valid_recent_daily_reference(self):
+        now = datetime(2026, 9, 26, 12, 0)
+        reference = {'base': 'AUD', 'rate': 0.91, 'sourceDate': '2026-09-25', 'fetchedAt': now.isoformat()}
+        self.assertTrue(reference_is_valid(reference, now))
+        self.assertFalse(reference_is_valid(None, now))
+        self.assertFalse(reference_is_valid({**reference, 'rate': -1}, now))
+        self.assertFalse(reference_is_valid({**reference, 'sourceDate': '2026-09-18'}, now))
+        self.assertFalse(reference_is_valid({**reference, 'fetchedAt': '2000-01-01T00:00:00'}, now))
 
     def test_weekday_schedule_and_overnight_window(self):
         monday = datetime(2026, 9, 28, 9, 0)

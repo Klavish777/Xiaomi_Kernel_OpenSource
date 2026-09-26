@@ -1,7 +1,8 @@
 """Pure, testable safety policy for Money Work's optional MT5 trade runner."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
+import math
 
 BOT_MAGIC = 26092707
 MAX_VOLUME = 0.01
@@ -46,6 +47,24 @@ def daily_loss_exceeded(start_balance: float, realized_pnl: float, floating_pnl:
     if balance <= 0:
         return True
     return float(realized_pnl) + float(floating_pnl) <= -(balance * MAX_DAILY_LOSS_RATIO)
+
+
+def reference_is_valid(reference: dict | None, now: datetime) -> bool:
+    if not isinstance(reference, dict) or reference.get("base") != "AUD":
+        return False
+    try:
+        rate = float(reference.get("rate"))
+        source_date_text = str(reference.get("sourceDate", ""))
+        source_date = date.fromisoformat(source_date_text)
+        if source_date.isoformat() != source_date_text:
+            return False
+        fetched = datetime.fromisoformat(str(reference.get("fetchedAt", "")).replace("Z", "+00:00"))
+        fetched_timestamp = fetched.timestamp()
+        age_seconds = now.timestamp() - fetched_timestamp
+    except (TypeError, ValueError, OverflowError):
+        return False
+    source_age_days = (now.date() - source_date).days
+    return math.isfinite(rate) and rate > 0 and 0 <= source_age_days <= 7 and 0 <= age_seconds <= 24 * 60 * 60
 
 
 def loss_streak_cooldown(closed_trades: list[dict], now: datetime) -> datetime | None:

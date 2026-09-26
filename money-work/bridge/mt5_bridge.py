@@ -25,6 +25,7 @@ from trading_policy import (
     loss_streak_cooldown,
     normalize_volume,
     pip_size,
+    reference_is_valid,
 )
 
 try:
@@ -338,6 +339,9 @@ def evaluate_agent(command: dict) -> dict:
                     "closedTrades": len(closed_trades), "winRate": win_rate, "consecutiveLosses": consecutive_losses}
         if signal == "WAIT":
             return {"state": "waiting_signal", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
+        if not reference_is_valid(command.get("reference"), now):
+            return {"state": "awaiting_internet_check", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades),
+                    "winRate": win_rate, "message": "A recent, verified AUD/CAD internet reference is required before a new entry."}
         if any(int(getattr(row, "magic", 0)) != BOT_MAGIC for row in all_positions):
             return {"state": "blocked_manual_position", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
 

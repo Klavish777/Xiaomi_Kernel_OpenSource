@@ -44,7 +44,7 @@ export function validateReferencePayload(payload, now = new Date()) {
   };
 }
 
-export function advancePaperAgent(state, { signal, price, quoteTime, symbol, settings, now = new Date() }) {
+export function advancePaperAgent(state, { signal, price, quoteTime, symbol, settings, allowEntry = true, now = new Date() }) {
   const timestamp = Number(quoteTime);
   const marketPrice = Number(price);
   if (!state?.enabled || !Number.isFinite(timestamp) || !Number.isFinite(marketPrice) || marketPrice <= 0) return state;
@@ -72,7 +72,9 @@ export function advancePaperAgent(state, { signal, price, quoteTime, symbol, set
     return next;
   }
 
-  if (!position && insideSchedule && direction) {
+  if (!position && insideSchedule && direction && !allowEntry) return next;
+
+  if (!position && insideSchedule && direction && allowEntry) {
     const capital = Math.min(10000000, Math.max(0, Number(settings.capital) || 0));
     const maxAllocation = Math.min(10000000, Math.max(0, Number(settings.maxAllocation) || 0));
     const allocation = Math.min(capital, maxAllocation);
@@ -96,6 +98,66 @@ export function advancePaperAgent(state, { signal, price, quoteTime, symbol, set
     }
   }
   return state;
+}
+
+export function validateReferenceRecord(reference, now = new Date()) {
+  if (!reference || typeof reference !== 'object') return { valid: false, reason: 'missing' };
+  const payload = { base: reference.base, date: reference.sourceDate, rates: { CAD: reference.rate } };
+  const daily = validateReferencePayload(payload, now);
+  const fetched = Date.parse(reference.fetchedAt);
+  const ageMs = now.getTime() - fetched;
+  const sourceAgeDays = daily.date ? (Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`) - Date.parse(`${daily.date}T00:00:00Z`)) / 86400000 : Infinity;
+  const fresh = Number.isFinite(fetched) && ageMs >= 0 && ageMs <= 24 * 60 * 60 * 1000;
+  const recent = sourceAgeDays >= 0 && sourceAgeDays <= 7;
+  return { valid: daily.valid && fresh && recent, rate: daily.rate, sourceDate: daily.date, fetchedAt: Number.isFinite(fetched) ? fetched : null, reason: !daily.valid ? 'invalid' : !fresh ? 'stale_fetch' : !recent ? 'stale_source' : 'verified' };
+}
+
+export function summarizePaperHistory(trades, now = new Date()) {
+  const closed = (Array.isArray(trades) ? trades : []).filter((trade) => trade?.status === 'closed');
+  const recent = [...closed].sort((left, right) => Date.parse(right.closeTime) - Date.parse(left.closeTime));
+  let consecutiveLosses = 0;
+  for (const trade of recent) {
+    if (!Number.isFinite(Date.parse(trade.closeTime)) || Number(trade.pnl) >= 0) break;
+    consecutiveLosses += 1;
+  }
+  const lastLossTime = consecutiveLosses >= 2 ? Date.parse(recent[0]?.closeTime) : NaN;
+  const cooldownUntil = Number.isFinite(lastLossTime) ? lastLossTime + 60 * 60 * 1000 : null;
+  const winRate = closed.length ? closed.filter((trade) => Number(trade.pnl) > 0).length / closed.length : null;
+  return {
+    state: cooldownUntil !== null && now.getTime() < cooldownUntil && now.getTime() >= lastLossTime ? 'learning_cooldown' : undefined,
+    closedTrades: closed.length,
+    winRate,
+    consecutiveLosses,
+    cooldownUntil,
+  };
+}
+
+export function buildAnalystConsensus({ analysis, quote, referenceData, brokerStatus, now = new Date() }) {
+  const signal = ['WATCH BUY', 'WATCH SELL', 'WAIT'].includes(analysis?.signal) ? analysis.signal : 'WAIT';
+  const rsi = Number(analysis?.rsi);
+  const technicalReady = Number.isFinite(rsi) && rsi >= 0 && rsi <= 100 && signal !== 'WAIT';
+  const quoteTime = Number(quote?.timeMsc || Number(quote?.time || 0) * 1000);
+  const quoteAge = quoteTime ? now.getTime() - quoteTime : Infinity;
+  const quoteReady = Number(quote?.bid) > 0 && Number(quote?.ask) >= Number(quote?.bid) && quoteAge >= 0 && quoteAge <= 30000;
+  const reference = validateReferenceRecord(referenceData, now);
+  const state = brokerStatus?.state;
+  const hardBlocked = ['error', 'daily_loss_stop', 'learning_cooldown', 'adaptive_filter'].includes(state);
+  const closedTrades = Number(brokerStatus?.closedTrades || 0);
+  const winRate = Number(brokerStatus?.winRate);
+  const learnerTightened = closedTrades >= 5 && Number.isFinite(winRate) && winRate < 0.4;
+  const learnedEntryAllowed = !learnerTightened || (signal === 'WATCH BUY' ? rsi < 60 : signal === 'WATCH SELL' ? rsi > 40 : false);
+  const entryAllowed = technicalReady && quoteReady && reference.valid && !hardBlocked && learnedEntryAllowed;
+  const reason = hardBlocked ? state : !quoteReady ? 'quote_unavailable' : !reference.valid ? `reference_${reference.reason}` : learnerTightened && !learnedEntryAllowed ? 'adaptive_filter' : !technicalReady ? 'no_directional_signal' : 'consensus_ready';
+  return {
+    entryAllowed,
+    decision: entryAllowed ? signal : 'WAIT',
+    reason,
+    analysts: {
+      technical: { ready: technicalReady, signal, rsi: Number.isFinite(rsi) ? rsi : null },
+      internet: { ready: reference.valid, rate: reference.rate, sourceDate: reference.sourceDate, reason: reference.reason },
+      learning: { ready: !hardBlocked && learnedEntryAllowed, state: hardBlocked ? state : learnerTightened && !learnedEntryAllowed ? 'adaptive_filter' : closedTrades ? 'learning' : 'warming_up', closedTrades, winRate: Number.isFinite(winRate) ? winRate : null },
+    },
+  };
 }
 
 export function adjustVirtualBalance(state, direction, amount, now = new Date()) {

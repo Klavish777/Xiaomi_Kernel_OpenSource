@@ -71,6 +71,11 @@ sys.modules.pop('mt5_bridge', None)
 bridge = importlib.import_module('mt5_bridge')
 
 
+def valid_reference():
+    now = datetime.now()
+    return {'base': 'AUD', 'rate': 0.9, 'sourceDate': now.date().isoformat(), 'fetchedAt': now.isoformat()}
+
+
 def demo_command(**overrides):
     command = {
         'symbol': 'AUDCAD',
@@ -78,6 +83,7 @@ def demo_command(**overrides):
         'rsi': 55,
         'liveConfirmed': False,
         'schedule': {'start': '00:00', 'end': '23:59', 'days': list(range(7))},
+        'reference': valid_reference(),
     }
     command.update(overrides)
     return command
@@ -106,6 +112,24 @@ class BridgeAgentTests(unittest.TestCase):
         self.assertGreater(request['tp'], request['price'])
         self.assertAlmostEqual(request['price'] - request['sl'], 0.002)
         self.assertAlmostEqual(request['tp'] - request['price'], 0.003)
+
+    def test_missing_or_stale_reference_blocks_new_entry(self):
+        missing = bridge.evaluate_agent(demo_command(reference=None))
+        self.assertEqual(missing['state'], 'awaiting_internet_check')
+        self.assertEqual(FAKE_MT5.requests, [])
+
+        stale = valid_reference()
+        stale['fetchedAt'] = '2000-01-01T00:00:00'
+        result = bridge.evaluate_agent(demo_command(reference=stale))
+        self.assertEqual(result['state'], 'awaiting_internet_check')
+        self.assertEqual(FAKE_MT5.requests, [])
+
+    def test_missing_reference_does_not_block_existing_position_close(self):
+        FAKE_MT5.positions = [SimpleNamespace(symbol='AUDCAD', magic=bridge.BOT_MAGIC, type=0, ticket=7, volume=0.01)]
+        result = bridge.evaluate_agent(demo_command(signal='WATCH SELL', reference=None))
+        self.assertEqual(result['state'], 'position_closed')
+        self.assertEqual(FAKE_MT5.requests[0]['position'], 7)
+        self.assertEqual(FAKE_MT5.requests[0]['volume'], 0.01)
 
     def test_real_account_requires_explicit_confirmation(self):
         FAKE_MT5.account.trade_mode = 2

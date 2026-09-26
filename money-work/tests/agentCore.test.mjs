@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adjustVirtualBalance, advancePaperAgent, computeRuleSignal, isInsideSchedule, validateReferencePayload } from '../src/agentCore.mjs';
+import { adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, computeRuleSignal, isInsideSchedule, summarizePaperHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
 
 test('schedule follows selected local weekdays and inclusive start/exclusive end', () => {
   const mondayMorning = new Date(2026, 8, 28, 9, 0);
@@ -23,6 +23,60 @@ test('internet reference validates schema, not-future date and positive rate', (
   assert.equal(validateReferencePayload({ base: 'AUD', date: '2026-09-27', rates: { CAD: 0.91 } }, now).valid, false);
   assert.equal(validateReferencePayload({ base: 'AUD', date: '2026-02-30', rates: { CAD: 0.91 } }, now).valid, false);
   assert.equal(validateReferencePayload({ base: 'AUD', date: '2026-09-25', rates: { CAD: -1 } }, now).valid, false);
+});
+
+test('three-analyst consensus requires directional data, fresh quote, validated reference and learner clearance', () => {
+  const now = new Date('2026-09-26T12:00:00Z');
+  const quote = { bid: 0.9, ask: 0.90002, timeMsc: now.getTime() };
+  const referenceData = { base: 'AUD', rate: 0.91, sourceDate: '2026-09-25', fetchedAt: now.toISOString() };
+  const ready = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote, referenceData, brokerStatus: { closedTrades: 2 }, now });
+  assert.equal(ready.entryAllowed, true);
+  assert.equal(ready.analysts.technical.signal, 'WATCH BUY');
+  assert.equal(ready.analysts.internet.ready, true);
+  assert.equal(ready.analysts.learning.state, 'learning');
+
+  const missingReference = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote, brokerStatus: {}, now });
+  assert.equal(missingReference.entryAllowed, false);
+  assert.equal(missingReference.reason, 'reference_missing');
+  const weakLearning = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 65 }, quote, referenceData, brokerStatus: { closedTrades: 5, winRate: 0.2 }, now });
+  assert.equal(weakLearning.entryAllowed, false);
+  assert.equal(weakLearning.reason, 'adaptive_filter');
+  assert.equal(validateReferenceRecord({ ...referenceData, fetchedAt: '2000-01-01T00:00:00Z' }, now).valid, false);
+});
+
+test('paper history applies the same two-loss cooldown and recent-win-rate safeguard', () => {
+  const now = new Date('2026-09-26T12:00:00Z');
+  const losses = [
+    { status: 'closed', pnl: -1, closeTime: '2026-09-26T11:59:00Z' },
+    { status: 'closed', pnl: -2, closeTime: '2026-09-26T11:58:00Z' },
+    { status: 'closed', pnl: 3, closeTime: '2026-09-26T11:00:00Z' },
+  ];
+  const stats = summarizePaperHistory(losses, now);
+  assert.equal(stats.closedTrades, 3);
+  assert.equal(stats.consecutiveLosses, 2);
+  assert.equal(stats.state, 'learning_cooldown');
+  const consensus = buildAnalystConsensus({
+    analysis: { signal: 'WATCH BUY', rsi: 55 },
+    quote: { bid: 0.9, ask: 0.9001, timeMsc: now.getTime() },
+    referenceData: { base: 'AUD', rate: 0.91, sourceDate: '2026-09-25', fetchedAt: now.toISOString() },
+    brokerStatus: stats,
+    now,
+  });
+  assert.equal(consensus.entryAllowed, false);
+  assert.equal(consensus.reason, 'learning_cooldown');
+  assert.equal(summarizePaperHistory([{ ...losses[0], closeTime: '2026-09-26T10:30:00Z' }], now).state, undefined);
+});
+
+test('paper learner can block new entries without interfering with position closure', () => {
+  const settings = { capital: 1000, maxAllocation: 500, start: '00:00', end: '23:59', days: [0, 1, 2, 3, 4, 5, 6] };
+  const now = new Date(2026, 8, 26, 12, 0);
+  const initial = { enabled: true, trades: [], realizedPnl: 0 };
+  const blocked = advancePaperAgent(initial, { signal: 'WATCH BUY', price: 0.9, quoteTime: 1000, symbol: 'AUDCAD', settings, allowEntry: false, now });
+  assert.equal(blocked.position ?? null, null);
+  const open = advancePaperAgent(initial, { signal: 'WATCH BUY', price: 0.9, quoteTime: 2000, symbol: 'AUDCAD', settings, now });
+  const closed = advancePaperAgent(open, { signal: 'WATCH SELL', price: 0.91, quoteTime: 3000, symbol: 'AUDCAD', settings, allowEntry: false, now });
+  assert.equal(closed.position, null);
+  assert.equal(closed.trades[0].status, 'closed');
 });
 
 test('paper agent opens within configured hours, closes on opposite signal and records virtual P&L', () => {

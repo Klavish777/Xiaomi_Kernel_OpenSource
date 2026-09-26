@@ -238,12 +238,20 @@ ipcMain.handle('mt5:agent-evaluate', async (_event, payload) => {
   if (!Number.isFinite(rsi) || rsi < 0 || rsi > 100) throw new Error('Invalid RSI value.');
   const schedule = payload.schedule || {};
   const days = Array.isArray(schedule.days) ? schedule.days.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6) : [];
+  const rawReference = payload.reference;
+  const reference = rawReference && typeof rawReference === 'object' ? {
+    base: String(rawReference.base || '').slice(0, 8),
+    sourceDate: String(rawReference.sourceDate || '').slice(0, 10),
+    rate: Number(rawReference.rate),
+    fetchedAt: String(rawReference.fetchedAt || '').slice(0, 40),
+  } : null;
   const result = await bridgeRequest('agent_evaluate', {
     symbol: String(payload.symbol),
     signal: payload.signal,
     rsi,
     liveConfirmed: payload.liveConfirmed === true,
     schedule: { start: String(schedule.start || ''), end: String(schedule.end || ''), days },
+    reference,
   }, 20000);
   return result.result;
 });
