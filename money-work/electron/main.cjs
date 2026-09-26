@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -157,6 +157,8 @@ function createWindow() {
   if (!app.isPackaged) mainWindow.loadURL('http://127.0.0.1:5173');
   else mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
+
+ipcMain.handle('external:open-mt5-download', async () => shell.openExternal('https://www.metatrader5.com/en/download'));
 
 ipcMain.handle('window:toggle-fullscreen', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return false;

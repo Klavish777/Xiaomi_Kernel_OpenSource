@@ -456,7 +456,8 @@ function App() {
               <p>Enter the MT5 account login, password, and exact server shown in MetaTrader 5. MetaQuotes-Demo accounts are supported. For a read-only connection, use the investor password if available. Credentials are passed only to the local MT5 connector.</p>
               <form className="account-form" onSubmit={connectAccount}>
                 <label>MT5 account number<input autoComplete="username" inputMode="numeric" value={accountForm.login} onChange={(event) => setAccountForm({ ...accountForm, login: event.target.value })} placeholder="Account login" required /></label>
-                <label>MT5 server <span className="field-optional">choose or type</span><input list="mt5-server-suggestions" value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="MetaQuotes-Demo or exact server name" required /><datalist id="mt5-server-suggestions"><option value="MetaQuotes-Demo" />{recentServers.map((server) => <option value={server} key={server} />)}{savedAccount?.server && <option value={savedAccount.server} />}</datalist><small className="server-help">MetaQuotes-Demo is included. Other MT5 server names vary by broker; enter the exact name shown in MT5. Recently entered servers are saved in this list.</small></label>
+                <label>MT5 server <span className="field-optional">choose or type</span><input list="mt5-server-suggestions" value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="MetaQuotes-Demo or exact server name" required /><datalist id="mt5-server-suggestions"><option value="MetaQuotes-Demo" />{recentServers.map((server) => <option value={server} key={server} />)}{savedAccount?.server && <option value={savedAccount.server} />}</datalist><small className="server-help">MetaQuotes-Demo and recent entries appear here. To find any broker server, use MT5 desktop: File → Open an Account → search broker/company name → Find your broker. The available global list changes and cannot be bundled as a complete static list.</small></label>
+                <div className="demo-register-prompt"><span>{l('Нет демо-счёта?', 'No demo account?')}</span><button type="button" onClick={() => setModal('demo-register')}>{l('Как зарегистрировать', 'Register a demo account')} <ArrowUpRight size={13} /></button></div>
                 <label>MT5 investor / read-only password<input type="password" autoComplete="current-password" value={accountForm.password} onChange={(event) => setAccountForm({ ...accountForm, password: event.target.value })} placeholder="Use investor password when available" required /></label>
                 <label>MT5 terminal path <span className="field-optional">optional</span><input value={accountForm.terminalPath} onChange={(event) => setAccountForm({ ...accountForm, terminalPath: event.target.value })} placeholder="Auto-detect, or C:\\Program Files\\...\\terminal64.exe" /></label>
                 <label className="remember-row"><input type="checkbox" checked={rememberAccount} onChange={(event) => setRememberAccount(event.target.checked)} /><span>Remember on this PC <small>Encrypt credentials with Windows secure storage.</small></span></label>
@@ -466,6 +467,18 @@ function App() {
               </form>
               <div className="secure-note"><ShieldCheck size={13} /> Never share account passwords or API keys in chat.</div>
             </>}
+          </> : modal === 'demo-register' ? <>
+            <span className="section-kicker">METAQUOTES-DEMO</span>
+            <h2>{l('Регистрация демо-счёта MT5', 'Register an MT5 demo account')}</h2>
+            <p>{l('Создание счёта выполняется в настольном MT5, а не в Money Work. Установи MT5 на этот же Windows-компьютер и выполни шаги:', 'The demo account is created in the MT5 desktop terminal, not in Money Work. Install MT5 on this Windows PC and follow these steps:')}</p>
+            <ol className="demo-steps">
+              <li>{l('Открой MT5 → Файл → Открыть счёт.', 'Open MT5 → File → Open an Account.')}</li>
+              <li>{l('Найди MetaQuotes Ltd или введи MetaQuotes-Demo и нажми поиск брокера.', 'Find MetaQuotes Ltd or type MetaQuotes-Demo, then search for the broker.')}</li>
+              <li>{l('Выбери сервер и «Открыть демо-счёт», заполни форму и сохрани выданные логин/пароль.', 'Select the server and “Open a demo account”, complete the form and save the issued login/password.')}</li>
+              <li>{l('Сначала проверь вход в самом MT5. Затем введи в Money Work сервер ровно так, как он указан там.', 'First verify the login in MT5 itself. Then enter the server in Money Work exactly as shown there.')}</li>
+            </ol>
+            <div className="demo-safety-note"><ShieldCheck size={14} /> {l('Для подключения только на чтение используй пароль инвестора, если он доступен. Не отправляй пароли скриншотами или в чат.', 'For read-only access, use the investor password if available. Do not send passwords in screenshots or chat.')}</div>
+            <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('connect')}>{l('Назад к подключению', 'Back to connection')}</button><button className="modal-primary" onClick={() => window.moneyWork?.openMt5Download?.()}>{l('Скачать MT5 для Windows', 'Download MT5 for Windows')}</button></div>
           </> : modal === 'instruments' ? <>
             <span className="section-kicker">MT5 MARKET WATCH</span>
             <h2>Find an instrument</h2>

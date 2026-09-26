@@ -32,3 +32,10 @@
 .language-control option { color:#edf2fa; background:#111620; }
 
 .server-help { color:#778395; font-size:8px; font-weight:400; line-height:1.45; }
+
+.demo-register-prompt { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px; border:1px solid #2d3748; border-radius:7px; background:#121824; color:#9aa8bc; font-size:9px; }
+.demo-register-prompt button { display:flex; align-items:center; gap:5px; border:0; background:transparent; color:#a9c5ff; font-size:9px; font-weight:600; }
+.demo-steps { display:grid; gap:11px; padding-left:20px; margin:17px 0; color:#c1cbd9; font-size:10px; line-height:1.55; }
+.demo-steps li::marker { color:#89a9ed; font-weight:700; }
+.demo-safety-note { display:flex; gap:8px; padding:10px; border:1px solid #344331; border-radius:7px; background:#172019; color:#b7c9b4; font-size:9px; line-height:1.5; }
+.demo-safety-note svg { flex:0 0 auto; color:#75c99f; }
