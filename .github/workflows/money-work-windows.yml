@@ -65,7 +65,7 @@ jobs:
           if ($existing) {
             gh release upload $tag $installer --clobber
           } else {
-            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Windows installer for the Money Work demo dashboard." --prerelease
+            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION adds RU/EN main dashboard labels, fullscreen startup and MT5 demo/live account identification. MT5 remains read-only; autonomous live order execution is not included." --prerelease
           }
 
       - name: Upload installer artifact

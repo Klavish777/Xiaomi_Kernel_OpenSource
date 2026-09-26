@@ -4,7 +4,7 @@ import {
   Activity, ArrowDownRight, ArrowUpRight, Bell, ChevronDown, CircleHelp,
   Clock3, Command, CreditCard, Gauge, LayoutDashboard, LockKeyhole,
   MoreHorizontal, Pause, Play, Plus, Search, Settings2, ShieldCheck,
-  Sparkles, TrendingUp, Wallet, X, Zap,
+  Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages,
 } from 'lucide-react';
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -17,6 +17,37 @@ const navItems = [
   { label: 'Positions', icon: Wallet, count: '2' },
   { label: 'History', icon: Clock3 },
 ];
+
+const copy = {
+  en: {
+    Overview: 'Overview', Markets: 'Markets', Strategies: 'Strategies', Positions: 'Positions', History: 'History',
+    'Risk controls': 'Risk controls', Reports: 'Reports', Workspace: 'Workspace', 'My workspace': 'My workspace',
+    'Personal account': 'Personal account', 'Good morning, Alex': 'Good morning, Alex',
+    'Here’s your trading overview for today.': 'Here’s your trading overview for today.',
+    'Add MT5 account': 'Add MT5 account', 'MT5 READ-ONLY': 'MT5 READ-ONLY', 'PAPER MODE': 'PAPER MODE',
+    'MT5 account equity': 'MT5 account equity', 'Demo balance': 'Demo balance', 'Paper P&L': 'Paper P&L',
+    'Demo win rate': 'Demo win rate', 'Demo max drawdown': 'Demo max drawdown',
+    'AI market read': 'AI market read', 'Favorite instruments': 'Favorite instruments', 'Paper trades': 'Paper trades',
+    'Demo positions': 'Demo positions', 'Strategy runner': 'Strategy runner', 'Start paper simulation': 'Start paper simulation',
+    'Pause demo': 'Pause demo', 'Connect read-only': 'Connect read-only', 'Add Bybit MT5 account': 'Add Bybit MT5 account',
+    'MT5 demo account': 'MT5 demo account', 'MT5 live account': 'MT5 live account', 'Language': 'Language',
+    'Fullscreen': 'Fullscreen', 'Windowed': 'Windowed', 'DEMO ACCOUNT': 'DEMO ACCOUNT', 'LIVE ACCOUNT': 'LIVE ACCOUNT',
+  },
+  ru: {
+    Overview: 'Обзор', Markets: 'Рынки', Strategies: 'Стратегии', Positions: 'Позиции', History: 'История',
+    'Risk controls': 'Контроль риска', Reports: 'Отчёты', Workspace: 'Рабочая область', 'My workspace': 'Моя рабочая область',
+    'Personal account': 'Личный аккаунт', 'Good morning, Alex': 'Доброе утро, Alex',
+    'Here’s your trading overview for today.': 'Сводка вашей торговли за сегодня.',
+    'Add MT5 account': 'Добавить счёт MT5', 'MT5 READ-ONLY': 'MT5 · ТОЛЬКО ЧТЕНИЕ', 'PAPER MODE': 'ДЕМО-РЕЖИМ',
+    'MT5 account equity': 'Средства на счёте MT5', 'Demo balance': 'Демо-баланс', 'Paper P&L': 'P&L симуляции',
+    'Demo win rate': 'Доля прибыльных демо-сделок', 'Demo max drawdown': 'Максимальная демо-просадка',
+    'AI market read': 'Анализ рынка ИИ', 'Favorite instruments': 'Избранные инструменты', 'Paper trades': 'Симулированные сделки',
+    'Demo positions': 'Демо-позиции', 'Strategy runner': 'Запуск стратегии', 'Start paper simulation': 'Запустить симуляцию',
+    'Pause demo': 'Приостановить демо', 'Connect read-only': 'Подключить для чтения', 'Add Bybit MT5 account': 'Добавить счёт Bybit MT5',
+    'MT5 demo account': 'Демо-счёт MT5', 'MT5 live account': 'Реальный счёт MT5', 'Language': 'Язык',
+    'Fullscreen': 'Полный экран', 'Windowed': 'Оконный режим', 'DEMO ACCOUNT': 'ДЕМО-СЧЁТ', 'LIVE ACCOUNT': 'РЕАЛЬНЫЙ СЧЁТ',
+  },
+};
 
 const rawSeries = [
   0.65332, 0.65337, 0.65328, 0.65341, 0.65346, 0.65339, 0.65352, 0.65348,
@@ -71,6 +102,9 @@ function MetricCard({ label, value, change, icon: Icon, tone, positive = true, n
 }
 
 function App() {
+  const [language, setLanguage] = useState(() => localStorage.getItem('money-work-language') || 'ru');
+  const [fullScreen, setFullScreen] = useState(true);
+  const t = (key) => copy[language]?.[key] || copy.en[key] || key;
   const [timeframe, setTimeframe] = useState('15M');
   const [activeNav, setActiveNav] = useState('Overview');
   const [selectedSymbol, setSelectedSymbol] = useState('AUDCAD');
@@ -98,7 +132,16 @@ function App() {
     return values;
   }, [timeframe, baseSymbol, selectedSymbol, historyBySymbol, liveQuote]);
   const lastPrice = liveQuote ? Number(liveQuote.bid).toFixed(5) : baseSymbol === 'AUDCAD' ? '0.65482' : baseSymbol === 'EURUSD' ? '1.08426' : '1.27194';
-  const todayLabel = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase();
+  const todayLabel = new Intl.DateTimeFormat(language === 'ru' ? 'ru-RU' : 'en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase();
+
+  useEffect(() => {
+    localStorage.setItem('money-work-language', language);
+  }, [language]);
+
+  useEffect(() => {
+    if (!window.moneyWork?.onFullscreenChange) return undefined;
+    return window.moneyWork.onFullscreenChange(setFullScreen);
+  }, []);
 
   useEffect(() => {
     if (!window.moneyWork) return undefined;
@@ -219,23 +262,23 @@ function App() {
 
         <div className="workspace-switcher">
           <div className="workspace-avatar">MW</div>
-          <div className="workspace-copy"><strong>My workspace</strong><span>Personal account</span></div>
+          <div className="workspace-copy"><strong>{t('My workspace')}</strong><span>{t('Personal account')}</span></div>
           <ChevronDown size={15} className="muted-icon" />
         </div>
 
-        <div className="nav-caption">WORKSPACE</div>
+        <div className="nav-caption">{t('Workspace').toUpperCase()}</div>
         <nav className="main-nav">
           {navItems.map(({ label, icon: Icon, count }) => (
             <button key={label} onClick={() => setActiveNav(label)} className={`nav-item ${activeNav === label ? 'active' : ''}`}>
-              <Icon size={17} strokeWidth={1.8} /><span>{label}</span>{count && <b>{count}</b>}
+              <Icon size={17} strokeWidth={1.8} /><span>{t(label)}</span>{count && <b>{count}</b>}
             </button>
           ))}
         </nav>
 
         <div className="nav-caption tools-caption">TOOLS</div>
         <nav className="main-nav">
-          <button onClick={() => setActiveNav('Risk controls')} className={`nav-item ${activeNav === 'Risk controls' ? 'active' : ''}`}><ShieldCheck size={17} /><span>Risk controls</span><span className="nav-dot" /></button>
-          <button onClick={() => setActiveNav('Reports')} className={`nav-item ${activeNav === 'Reports' ? 'active' : ''}`}><Activity size={17} /><span>Reports</span></button>
+          <button onClick={() => setActiveNav('Risk controls')} className={`nav-item ${activeNav === 'Risk controls' ? 'active' : ''}`}><ShieldCheck size={17} /><span>{t('Risk controls')}</span><span className="nav-dot" /></button>
+          <button onClick={() => setActiveNav('Reports')} className={`nav-item ${activeNav === 'Reports' ? 'active' : ''}`}><Activity size={17} /><span>{t('Reports')}</span></button>
         </nav>
 
         <div className="sidebar-bottom">
@@ -254,15 +297,15 @@ function App() {
 
       <main className="main-area">
         <header className="topbar">
-          <div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><strong>{activeNav}</strong></div>
+          <div className="breadcrumbs"><span>{t('Workspace')}</span><span className="crumb-slash">/</span><strong>{t(activeNav)}</strong></div>
           <div className="topbar-actions">
-            <div className={`environment-pill ${mt5Account ? 'connected' : ''}`}><span className="pulse-dot" /> {mt5Account ? 'MT5 READ-ONLY' : 'PAPER MODE'}</div>
+            <div className={`environment-pill ${mt5Account ? 'connected' : ''}`}><span className="pulse-dot" /> {mt5Account ? (mt5Account.accountType === 'demo' ? t('DEMO ACCOUNT') : t('LIVE ACCOUNT')) : t('PAPER MODE')}</div>
             <button className="connect-button" onClick={() => { setMt5Error(''); setModal('connect'); }}>
-              {mt5Account ? <><Activity size={15} /> {mt5Account.server}</> : <><Plus size={15} /> Add MT5 account</>}
+              {mt5Account ? <><Activity size={15} /> {mt5Account.server}</> : <><Plus size={15} /> {t('Add MT5 account')}</>}
             </button>
             <button className="top-icon" aria-label="Search"><Search size={17} /></button>
             <button className="top-icon notification-button" aria-label="Notifications"><Bell size={17} /><i /></button>
-            <div className="top-divider" />
+            <label className="language-control" title={t('Language')}><Languages size={14} /><select aria-label={t('Language')} value={language} onChange={(event) => setLanguage(event.target.value)}><option value="ru">RU</option><option value="en">EN</option></select></label><button className="top-icon fullscreen-button" onClick={async () => { if (window.moneyWork) setFullScreen(await window.moneyWork.toggleFullscreen()); }} title={fullScreen ? t('Windowed') : t('Fullscreen')} aria-label={fullScreen ? t('Windowed') : t('Fullscreen')}><Maximize2 size={16} /></button><div className="top-divider" />
             <div className="top-user-avatar">AM</div>
           </div>
         </header>
@@ -275,8 +318,8 @@ function App() {
           <div className="page-heading">
             <div>
               <div className="eyebrow"><span className="eyebrow-line" /> {todayLabel}</div>
-              <h1>Good morning, Alex <span className="wave">✦</span></h1>
-              <p>Here’s your trading overview for today.</p>
+              <h1>{t('Good morning, Alex')} <span className="wave">✦</span></h1>
+              <p>{t('Here’s your trading overview for today.')}</p>
             </div>
             <div className="heading-actions">
               <button className="date-button"><Clock3 size={15} /> Last 24 hours <ChevronDown size={14} /></button>
@@ -285,10 +328,10 @@ function App() {
           </div>
 
           <section className="metrics-grid">
-            <MetricCard label={mt5Account ? 'MT5 account equity' : 'Demo balance'} value={mt5Account ? `${mt5Account.currency} ${Number(mt5Account.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$12,845.20'} change={mt5Account ? 'Read-only' : '4.8%'} note={mt5Account ? `Account ${mt5Account.login}` : 'sample · vs. last week'} icon={Wallet} tone="blue" neutral={Boolean(mt5Account)} />
-            <MetricCard label="Paper P&L" value="+$284.50" change="2.26%" note="sample simulation" icon={TrendingUp} tone="green" />
-            <MetricCard label="Demo win rate" value="64.7%" change="3.2%" note="sample · last 30 trades" icon={Gauge} tone="purple" />
-            <MetricCard label="Demo max drawdown" value="1.82%" change="0.4%" note="sample value" icon={ShieldCheck} tone="amber" positive={false} />
+            <MetricCard label={mt5Account ? t('MT5 account equity') : t('Demo balance')} value={mt5Account ? `${mt5Account.currency} ${Number(mt5Account.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$12,845.20'} change={mt5Account ? 'Read-only' : '4.8%'} note={mt5Account ? `Account ${mt5Account.login}` : 'sample · vs. last week'} icon={Wallet} tone="blue" neutral={Boolean(mt5Account)} />
+            <MetricCard label={t('Paper P&L')} value="+$284.50" change="2.26%" note="sample simulation" icon={TrendingUp} tone="green" />
+            <MetricCard label={t('Demo win rate')} value="64.7%" change="3.2%" note="sample · last 30 trades" icon={Gauge} tone="purple" />
+            <MetricCard label={t('Demo max drawdown')} value="1.82%" change="0.4%" note="sample value" icon={ShieldCheck} tone="amber" positive={false} />
           </section>
 
           <section className="primary-grid">
@@ -326,7 +369,7 @@ function App() {
             </article>
 
             <article className="panel insight-panel">
-              <div className="panel-heading insight-heading"><div><div className="section-kicker"><Sparkles size={14} /> MARKET PULSE</div><h2>AI market read</h2></div><button className="more-button"><MoreHorizontal size={18} /></button></div>
+              <div className="panel-heading insight-heading"><div><div className="section-kicker"><Sparkles size={14} /> MARKET PULSE</div><h2>{t('AI market read')}</h2></div><button className="more-button"><MoreHorizontal size={18} /></button></div>
               <div className="signal-block">
                 <div className="signal-topline"><span className="signal-neutral"><span /> WAIT</span><span className="signal-sample">SAMPLE</span></div>
                 <div className="signal-title">No clear edge yet</div>
@@ -346,7 +389,7 @@ function App() {
 
           <section className="secondary-grid">
             <article className="panel watchlist-panel">
-              <div className="panel-heading"><div><div className="section-kicker">MARKET WATCH</div><h2>Favorite instruments</h2></div><button className="add-small" onClick={() => setModal('instruments')}><Plus size={14} /> Add</button></div>
+              <div className="panel-heading"><div><div className="section-kicker">MARKET WATCH</div><h2>{t('Favorite instruments')}</h2></div><button className="add-small" onClick={() => setModal('instruments')}><Plus size={14} /> Add</button></div>
               <div className="table-head"><span>INSTRUMENT</span><span>LAST PRICE</span><span>24H CHANGE</span><span /></div>
               <div className="instrument-list">
                 {symbolRows.map((item) => {
@@ -366,7 +409,7 @@ function App() {
             </article>
 
             <article className="panel activity-panel">
-              <div className="panel-heading"><div><div className="section-kicker">RECENT ACTIVITY</div><h2>Paper trades</h2></div><button className="filter-button">Last 7 days <ChevronDown size={13} /></button></div>
+              <div className="panel-heading"><div><div className="section-kicker">RECENT ACTIVITY</div><h2>{t('Paper trades')}</h2></div><button className="filter-button">Last 7 days <ChevronDown size={13} /></button></div>
               <div className="activity-list">
                 {activities.map((item, index) => (
                   <div className="activity-row" key={`${item.pair}-${index}`}>
@@ -382,18 +425,18 @@ function App() {
 
           <section className="bottom-grid">
             <article className="panel positions-panel">
-              <div className="panel-heading"><div><div className="section-kicker">OPEN POSITIONS</div><h2>Demo positions <span className="count-badge">2</span></h2></div><button className="filter-button">All accounts <ChevronDown size={13} /></button></div>
+              <div className="panel-heading"><div><div className="section-kicker">OPEN POSITIONS</div><h2>{t('Demo positions')} <span className="count-badge">2</span></h2></div><button className="filter-button">All accounts <ChevronDown size={13} /></button></div>
               <div className="position-table-head"><span>INSTRUMENT</span><span>TYPE</span><span>SIZE</span><span>ENTRY</span><span>MARK</span><span>UNREALIZED P&L</span><span /></div>
               <div className="position-row"><div className="position-symbol"><div className="pair-icon mini">AU</div><div><strong>AUDCAD</strong><small>Buy · 15M</small></div></div><span className="position-type buy-type">BUY</span><span>0.08 lot</span><span>0.65296</span><span>0.65482</span><strong className="positive-text">+$14.88</strong><button className="row-more"><MoreHorizontal size={17} /></button></div>
               <div className="position-row"><div className="position-symbol"><div className="pair-icon mini euro">EU</div><div><strong>EURUSD</strong><small>Sell · 1H</small></div></div><span className="position-type sell-type">SELL</span><span>0.05 lot</span><span>1.08502</span><span>1.08426</span><strong className="positive-text">+$3.80</strong><button className="row-more"><MoreHorizontal size={17} /></button></div>
             </article>
 
             <article className="panel bot-panel">
-              <div className="bot-head"><div className="bot-icon"><Zap size={17} fill="currentColor" /></div><div><div className="section-kicker">AUTOMATION</div><h2>Strategy runner</h2></div><span className="demo-chip">PAPER</span></div>
+              <div className="bot-head"><div className="bot-icon"><Zap size={17} fill="currentColor" /></div><div><div className="section-kicker">AUTOMATION</div><h2>{t('Strategy runner')}</h2></div><span className="demo-chip">PAPER</span></div>
               <p className="bot-description">Test your rules on simulated data before connecting a broker.</p>
               <div className="bot-status"><span className={`bot-status-dot ${demoRunning ? 'running' : ''}`} /><span>{demoRunning ? 'Paper simulation running' : 'Simulation is paused'}</span><span className="bot-time">No live orders</span></div>
               <div className="risk-setting"><div><span>Daily loss guard</span><small>Demo limit · $250</small></div><button className={`toggle ${riskEnabled ? 'on' : ''}`} onClick={() => setRiskEnabled(!riskEnabled)} aria-label="Toggle daily risk guard"><i /></button></div>
-              <button className={`run-button ${demoRunning ? 'pause' : ''}`} onClick={() => setDemoRunning(!demoRunning)}>{demoRunning ? <><Pause size={15} fill="currentColor" /> Pause demo</> : <><Play size={15} fill="currentColor" /> Start paper simulation</>}</button>
+              <button className={`run-button ${demoRunning ? 'pause' : ''}`} onClick={() => setDemoRunning(!demoRunning)}>{demoRunning ? <><Pause size={15} fill="currentColor" /> {t('Pause demo')}</> : <><Play size={15} fill="currentColor" /> {t('Start paper simulation')}</>}</button>
               <div className="live-lock"><LockKeyhole size={12} /> Live trading is not enabled in this build</div>
             </article>
           </section>
@@ -408,16 +451,16 @@ function App() {
           <div className="modal-icon"><LockKeyhole size={20} /></div>
           {modal === 'connect' ? <>
             <span className="section-kicker">READ-ONLY MT5 CONNECTION</span>
-            <h2>{mt5Account ? 'Account connected' : 'Add Bybit MT5 account'}</h2>
+            <h2>{mt5Account ? 'Account connected' : t('Add Bybit MT5 account')}</h2>
             {mt5Account ? <>
               <p>Connected to <strong>{mt5Account.server}</strong> as account <strong>{mt5Account.login}</strong>. Money Work reads equity and quotes only; no orders can be sent.</p>
               <div className="account-summary"><span>Equity</span><strong>{mt5Account.currency} {Number(mt5Account.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><span>Leverage</span><strong>1:{mt5Account.leverage}</strong></div>
               <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>Close</button><button className="modal-danger" onClick={disconnectAccount}>Disconnect</button></div>
             </> : <>
-              <p>Use your Bybit MT5 CFD account details from the MetaTrader 5 terminal. Credentials are sent only to the local read-only connector.</p>
+              <p>Use the MT5 account login, password, and exact server shown in MetaTrader 5. Demo accounts are supported: use your demo login and demo server. For Bybit CFD this is the MT5 account, not your Bybit website password. Credentials stay in the local read-only connector.</p>
               <form className="account-form" onSubmit={connectAccount}>
                 <label>MT5 account number<input autoComplete="username" inputMode="numeric" value={accountForm.login} onChange={(event) => setAccountForm({ ...accountForm, login: event.target.value })} placeholder="Account login" required /></label>
-                <label>MT5 server<input value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="Choose the exact server shown in MT5" required /></label>
+                <label>MT5 server<input value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="Exact demo or live server shown in MT5" required /></label>
                 <label>MT5 investor / read-only password<input type="password" autoComplete="current-password" value={accountForm.password} onChange={(event) => setAccountForm({ ...accountForm, password: event.target.value })} placeholder="Use investor password when available" required /></label>
                 <label>MT5 terminal path <span className="field-optional">optional</span><input value={accountForm.terminalPath} onChange={(event) => setAccountForm({ ...accountForm, terminalPath: event.target.value })} placeholder="Auto-detect, or C:\\Program Files\\...\\terminal64.exe" /></label>
                 <label className="remember-row"><input type="checkbox" checked={rememberAccount} onChange={(event) => setRememberAccount(event.target.checked)} /><span>Remember on this PC <small>Encrypt credentials with Windows secure storage.</small></span></label>

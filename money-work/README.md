@@ -1,15 +1,16 @@
-# Money Work — v0.2.0
+# Money Work — v0.3.0
 
 Windows desktop dashboard prototype for a **read-only Bybit MT5 CFD** connection. It can read MT5 account equity and poll a selected quote once per second when connected. The app has **no order placement or autonomous trading endpoint** in this version.
 
-The dashboard still contains clearly labelled illustrative P&L, positions, AI analysis, and demo history; only account equity and the selected MT5 quote become live. The browser preview does not have access to a local MT5 terminal—the connector works in the installed Windows desktop app.
+The dashboard still contains illustrative P&L, positions, AI analysis, and demo history; only account equity and the selected MT5 quote become live. This update adds a Russian/English language selector for the main dashboard, fullscreen startup (F11 toggles; Esc exits fullscreen), and MT5 demo/live account identification. The browser preview does not have access to a local MT5 terminal—the connector works in the installed Windows desktop app.
 
 ## Windows setup
 
 1. Install the official MetaTrader 5 terminal and confirm the Bybit MT5 CFD account works there.
 2. Install Money Work from the Windows installer release.
 3. In Money Work, choose **Add MT5 account** and enter the account number, the exact server shown by MT5, and the MT5 investor/read-only password if your broker provides one. The bridge has no order-placement function. The terminal path is optional if the bridge can auto-detect it.
-4. Search/select the exact broker symbol. Suffixes such as `AUDCAD+` are supported when that is how the instrument appears in MT5 Market Watch.
+4. Demo MT5 accounts are supported: enter the demo login, password, and exact demo server shown in the terminal. Money Work reads the account mode from MT5 and labels demo versus live.
+5. Search/select the exact broker symbol. Suffixes such as `AUDCAD+` are supported when that is how the instrument appears in MT5 Market Watch.
 
 If **Remember on this PC** is selected, credentials are encrypted with Electron `safeStorage` backed by Windows DPAPI. Otherwise the password is only passed to the local connector for the current session. Do not send credentials in chat.
 
@@ -32,4 +33,4 @@ To create a Windows installer, build the bridge first, then run `npm run dist:wi
 
 ## Safety boundary
 
-The connector only supports account metadata, symbol search, and quote polling. It has no order-send command and cannot execute trades. A future trading mode must be designed and tested separately with paper trading, explicit opt-in, strict risk limits, audit logs, and a kill switch.
+The connector only supports account metadata, symbol search, history, and quote polling. It has no order-send command and cannot execute trades. A future trading mode must be designed and tested separately with paper trading, explicit opt-in, strict risk limits, audit logs, and a kill switch.

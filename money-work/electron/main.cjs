@@ -114,6 +114,7 @@ function createWindow() {
     backgroundColor: '#090b11',
     title: 'Money Work',
     autoHideMenuBar: true,
+    fullscreen: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -121,9 +122,26 @@ function createWindow() {
       sandbox: true,
     },
   });
+  mainWindow.on('enter-full-screen', () => mainWindow.webContents.send('window:fullscreen', true));
+  mainWindow.on('leave-full-screen', () => mainWindow.webContents.send('window:fullscreen', false));
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.key === 'F11') {
+      event.preventDefault();
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
+    } else if (input.key === 'Escape' && mainWindow.isFullScreen()) {
+      mainWindow.setFullScreen(false);
+    }
+  });
   if (!app.isPackaged) mainWindow.loadURL('http://127.0.0.1:5173');
   else mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
+
+ipcMain.handle('window:toggle-fullscreen', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  mainWindow.setFullScreen(!mainWindow.isFullScreen());
+  return mainWindow.isFullScreen();
+});
 
 ipcMain.handle('mt5:connect', async (_event, credentials) => {
   if (!credentials || !credentials.login || !credentials.password || !credentials.server) {

@@ -1,6 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('moneyWork', {
+  toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
+  onFullscreenChange: (callback) => {
+    const listener = (_event, isFullScreen) => callback(isFullScreen);
+    ipcRenderer.on('window:fullscreen', listener);
+    return () => ipcRenderer.removeListener('window:fullscreen', listener);
+  },
   connectMt5: (credentials) => ipcRenderer.invoke('mt5:connect', credentials),
   connectSavedMt5: () => ipcRenderer.invoke('mt5:connect-saved'),
   getSavedMt5Account: () => ipcRenderer.invoke('mt5:get-saved-account'),

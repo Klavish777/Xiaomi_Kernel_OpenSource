@@ -46,6 +46,8 @@ def account_payload() -> dict:
         "balance": float(info.balance),
         "equity": float(info.equity),
         "leverage": int(info.leverage),
+        "tradeMode": int(info.trade_mode),
+        "accountType": "demo" if int(info.trade_mode) == 0 else "contest" if int(info.trade_mode) == 1 else "real",
         "connected": True,
     }
 
