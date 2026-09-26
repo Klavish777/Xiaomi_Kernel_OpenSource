@@ -51,6 +51,12 @@ const copy = {
 
 function App() {
   const [language, setLanguage] = useState(() => localStorage.getItem('money-work-language') || 'ru');
+  const [recentServers, setRecentServers] = useState(() => {
+    try {
+      const values = JSON.parse(localStorage.getItem('money-work-mt5-servers') || '[]');
+      return Array.isArray(values) ? values.filter((value) => typeof value === 'string').slice(0, 20) : [];
+    } catch { return []; }
+  });
   const [fullScreen, setFullScreen] = useState(true);
   const t = (key) => copy[language]?.[key] || copy.en[key] || key;
   const l = (ru, en) => language === 'ru' ? ru : en;
@@ -65,7 +71,7 @@ function App() {
   const [mt5Error, setMt5Error] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [rememberAccount, setRememberAccount] = useState(false);
-  const [accountForm, setAccountForm] = useState({ login: '', password: '', server: '', terminalPath: '' });
+  const [accountForm, setAccountForm] = useState({ login: '', password: '', server: 'MetaQuotes-Demo', terminalPath: '' });
   const [symbolQuery, setSymbolQuery] = useState('AUDCAD');
   const [symbolResults, setSymbolResults] = useState([]);
   const [marketQuery, setMarketQuery] = useState('');
@@ -239,6 +245,16 @@ function App() {
     finally { setAccountDataLoading(false); }
   }
 
+  function rememberServer(server) {
+    const normalized = String(server || '').trim();
+    if (!normalized) return;
+    setRecentServers((current) => {
+      const next = [normalized, ...current.filter((item) => item.toLowerCase() !== normalized.toLowerCase())].slice(0, 20);
+      localStorage.setItem('money-work-mt5-servers', JSON.stringify(next));
+      return next;
+    });
+  }
+
   async function connectAccount(event) {
     event?.preventDefault();
     if (!window.moneyWork) {
@@ -247,9 +263,11 @@ function App() {
     }
     setConnecting(true);
     setMt5Error('');
+    rememberServer(accountForm.server);
     try {
       const account = await window.moneyWork.connectMt5({ ...accountForm, remember: rememberAccount });
       setMt5Account(account);
+      rememberServer(account.server);
       if (rememberAccount) setSavedAccount({ login: account.login, server: account.server, terminalPath: accountForm.terminalPath });
       setModal('');
       const names = await window.moneyWork.searchMt5Symbols('');
@@ -271,6 +289,7 @@ function App() {
     try {
       const account = await window.moneyWork.connectSavedMt5();
       setMt5Account(account);
+      rememberServer(account.server);
       setModal('');
       const names = await window.moneyWork.searchMt5Symbols('');
       setSymbolResults(names);
@@ -437,7 +456,7 @@ function App() {
               <p>Enter the MT5 account login, password, and exact server shown in MetaTrader 5. MetaQuotes-Demo accounts are supported. For a read-only connection, use the investor password if available. Credentials are passed only to the local MT5 connector.</p>
               <form className="account-form" onSubmit={connectAccount}>
                 <label>MT5 account number<input autoComplete="username" inputMode="numeric" value={accountForm.login} onChange={(event) => setAccountForm({ ...accountForm, login: event.target.value })} placeholder="Account login" required /></label>
-                <label>MT5 server<input value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="Exact demo or live server shown in MT5" required /></label>
+                <label>MT5 server <span className="field-optional">choose or type</span><input list="mt5-server-suggestions" value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="MetaQuotes-Demo or exact server name" required /><datalist id="mt5-server-suggestions"><option value="MetaQuotes-Demo" />{recentServers.map((server) => <option value={server} key={server} />)}{savedAccount?.server && <option value={savedAccount.server} />}</datalist><small className="server-help">MetaQuotes-Demo is included. Other MT5 server names vary by broker; enter the exact name shown in MT5. Recently entered servers are saved in this list.</small></label>
                 <label>MT5 investor / read-only password<input type="password" autoComplete="current-password" value={accountForm.password} onChange={(event) => setAccountForm({ ...accountForm, password: event.target.value })} placeholder="Use investor password when available" required /></label>
                 <label>MT5 terminal path <span className="field-optional">optional</span><input value={accountForm.terminalPath} onChange={(event) => setAccountForm({ ...accountForm, terminalPath: event.target.value })} placeholder="Auto-detect, or C:\\Program Files\\...\\terminal64.exe" /></label>
                 <label className="remember-row"><input type="checkbox" checked={rememberAccount} onChange={(event) => setRememberAccount(event.target.checked)} /><span>Remember on this PC <small>Encrypt credentials with Windows secure storage.</small></span></label>

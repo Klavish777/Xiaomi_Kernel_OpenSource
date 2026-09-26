@@ -30,3 +30,5 @@
 .language-control { display:flex; align-items:center; gap:5px; padding:0 7px; height:30px; border:1px solid #303747; border-radius:7px; color:#9ca8ba; background:#111620; }
 .language-control select { border:0; outline:0; color:#d9e1ee; background:transparent; font:600 9px 'DM Sans',sans-serif; cursor:pointer; }
 .language-control option { color:#edf2fa; background:#111620; }
+
+.server-help { color:#778395; font-size:8px; font-weight:400; line-height:1.45; }
