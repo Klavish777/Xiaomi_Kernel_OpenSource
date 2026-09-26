@@ -1,37 +1,35 @@
-# Money Work — 0.1.0
+# Money Work — v0.2.0
 
-A polished Windows desktop dashboard prototype for trading analysis. The current build is **demo-only**: market prices, account metrics, AI readouts, positions, and trade activity are sample data. No broker connection, credential collection, or real-order execution is implemented.
+Windows desktop dashboard prototype for a **read-only Bybit MT5 CFD** connection. It can read MT5 account equity and poll a selected quote once per second when connected. The app has **no order placement or autonomous trading endpoint** in this version.
 
-## Run the dashboard preview
+The dashboard still contains clearly labelled illustrative P&L, positions, AI analysis, and demo history; only account equity and the selected MT5 quote become live. The browser preview does not have access to a local MT5 terminal—the connector works in the installed Windows desktop app.
 
-```bash
-npm install
-npm run dev
-```
+## Windows setup
 
-## Run as an Electron desktop app
+1. Install the official MetaTrader 5 terminal and confirm the Bybit MT5 CFD account works there.
+2. Install Money Work from the Windows installer release.
+3. In Money Work, choose **Add MT5 account** and enter the account number, the exact server shown by MT5, and the MT5 investor/read-only password if your broker provides one. The bridge has no order-placement function. The terminal path is optional if the bridge can auto-detect it.
+4. Search/select the exact broker symbol. Suffixes such as `AUDCAD+` are supported when that is how the instrument appears in MT5 Market Watch.
 
-```bash
-npm install
-npm run electron:dev
-```
+If **Remember on this PC** is selected, credentials are encrypted with Electron `safeStorage` backed by Windows DPAPI. Otherwise the password is only passed to the local connector for the current session. Do not send credentials in chat.
 
-## Build the Windows installer
-
-On Windows:
+## Development
 
 ```powershell
 npm ci
-npm run dist:win
+npm run dev
 ```
 
-The installer is written to `release/`. GitHub Actions also builds a Windows installer when `money-work/**` changes on the Arena working branch.
+To build the read-only MT5 bridge and launch the desktop UI on Windows:
 
-## Safety and integration roadmap
+```powershell
+py -m pip install MetaTrader5 pyinstaller
+pyinstaller --clean --noconfirm --collect-all MetaTrader5 --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
+npm run electron:dev
+```
 
-1. Read-only instrument/account connection, if supported, with credentials stored securely on the user's device.
-2. Historical data, backtesting, and paper trading with explicit sample/test labels.
-3. Risk engine with hard exposure/drawdown limits, kill switch, and detailed audit log.
-4. Live order execution only after venue/API capabilities and permissions are verified, with a separate explicit opt-in.
+To create a Windows installer, build the bridge first, then run `npm run dist:win`. GitHub Actions builds and publishes the Windows installer for each version on the Arena working branch.
 
-The current dashboard uses AUDCAD as an illustrative symbol and Bybit CFD/MT5 wording as a UI placeholder. The exact Bybit MT5 CFD connection method and macOS/Windows bridge must be validated before connecting an account. Never paste API keys, passwords, or seed phrases into chat.
+## Safety boundary
+
+The connector only supports account metadata, symbol search, and quote polling. It has no order-send command and cannot execute trades. A future trading mode must be designed and tested separately with paper trading, explicit opt-in, strict risk limits, audit logs, and a kill switch.

@@ -1,4 +1,9 @@
 node_modules/
 dist/
 release/
+__pycache__/
+*.pyc
+bridge/build/
+bridge/dist/
+mt5_bridge.spec
 .DS_Store

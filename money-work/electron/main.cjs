@@ -1,8 +1,112 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
+
+let mainWindow;
+let bridge;
+let nextRequestId = 1;
+let stdoutBuffer = '';
+const pending = new Map();
+const accountFile = () => path.join(app.getPath('userData'), 'mt5-account.bin');
+
+function sendEvent(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mt5:event', payload);
+}
+
+function rejectPending(message) {
+  for (const { reject, timer } of pending.values()) {
+    clearTimeout(timer);
+    reject(new Error(message));
+  }
+  pending.clear();
+}
+
+function startBridge() {
+  if (bridge && bridge.exitCode === null) return bridge;
+  const bridgePath = app.isPackaged
+    ? path.join(process.resourcesPath, 'mt5-bridge.exe')
+    : path.join(__dirname, '..', 'bridge', 'dist', 'mt5-bridge.exe');
+  if (!fs.existsSync(bridgePath)) {
+    throw new Error('MT5 connector is not bundled. Install the Windows Money Work build and MetaTrader 5 terminal.');
+  }
+  bridge = spawn(bridgePath, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  stdoutBuffer = '';
+  bridge.stdout.setEncoding('utf8');
+  bridge.stdout.on('data', (chunk) => {
+    stdoutBuffer += chunk;
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const message = JSON.parse(line);
+        if (message.type === 'response') {
+          const entry = pending.get(message.requestId);
+          if (entry) {
+            clearTimeout(entry.timer);
+            pending.delete(message.requestId);
+            if (message.ok) entry.resolve(message);
+            else entry.reject(new Error(message.message || 'MT5 connector request failed.'));
+          }
+        } else {
+          sendEvent(message);
+        }
+      } catch (error) {
+        sendEvent({ type: 'warning', message: `Could not read MT5 connector output: ${error.message}` });
+      }
+    }
+  });
+  bridge.stderr.setEncoding('utf8');
+  bridge.stderr.on('data', (text) => sendEvent({ type: 'log', message: text.trim() }));
+  bridge.on('error', (error) => {
+    sendEvent({ type: 'error', message: `Could not start MT5 connector: ${error.message}` });
+    rejectPending(error.message);
+    bridge = null;
+  });
+  bridge.on('exit', (code) => {
+    if (code !== 0 && code !== null) sendEvent({ type: 'error', message: `MT5 connector stopped (code ${code}).` });
+    rejectPending('MT5 connector stopped.');
+    bridge = null;
+  });
+  return bridge;
+}
+
+function bridgeRequest(action, payload = {}, timeoutMs = 45000) {
+  const child = startBridge();
+  const requestId = nextRequestId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(requestId);
+      reject(new Error('MT5 did not respond in time. Check that the terminal is installed and reachable.'));
+    }, timeoutMs);
+    pending.set(requestId, { resolve, reject, timer });
+    child.stdin.write(`${JSON.stringify({ action, requestId, ...payload })}\n`, (error) => {
+      if (error) {
+        clearTimeout(timer);
+        pending.delete(requestId);
+        reject(error);
+      }
+    });
+  });
+}
+
+function saveCredentials(credentials) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows secure credential storage is unavailable. Do not enable Remember account.');
+  fs.mkdirSync(app.getPath('userData'), { recursive: true });
+  const encrypted = safeStorage.encryptString(JSON.stringify(credentials));
+  fs.writeFileSync(accountFile(), encrypted, { mode: 0o600 });
+}
+
+function readCredentials() {
+  const file = accountFile();
+  if (!fs.existsSync(file)) return null;
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows secure credential storage is unavailable.');
+  return JSON.parse(safeStorage.decryptString(fs.readFileSync(file)));
+}
 
 function createWindow() {
-  const window = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1520,
     height: 980,
     minWidth: 1120,
@@ -11,26 +115,71 @@ function createWindow() {
     title: 'Money Work',
     autoHideMenuBar: true,
     webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   });
-
-  if (!app.isPackaged) {
-    window.loadURL('http://127.0.0.1:5173');
-  } else {
-    window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
-  }
+  if (!app.isPackaged) mainWindow.loadURL('http://127.0.0.1:5173');
+  else mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+ipcMain.handle('mt5:connect', async (_event, credentials) => {
+  if (!credentials || !credentials.login || !credentials.password || !credentials.server) {
+    throw new Error('Account number, password, and MT5 server are required.');
+  }
+  if (credentials.remember && !safeStorage.isEncryptionAvailable()) {
+    throw new Error('Windows secure credential storage is unavailable. Connect without saving, or enable Windows DPAPI support.');
+  }
+  const safeCredentials = {
+    login: String(credentials.login).trim(),
+    password: String(credentials.password),
+    server: String(credentials.server).trim(),
+    terminalPath: String(credentials.terminalPath || '').trim(),
+  };
+  const result = await bridgeRequest('connect', safeCredentials, 60000);
+  if (credentials.remember) saveCredentials(safeCredentials);
+  return result.account;
 });
 
+ipcMain.handle('mt5:connect-saved', async () => {
+  const credentials = readCredentials();
+  if (!credentials) throw new Error('No saved account is available on this device.');
+  const result = await bridgeRequest('connect', credentials, 60000);
+  return result.account;
+});
+
+ipcMain.handle('mt5:get-saved-account', async () => {
+  const credentials = readCredentials();
+  return credentials ? { login: credentials.login, server: credentials.server, terminalPath: credentials.terminalPath } : null;
+});
+
+ipcMain.handle('mt5:disconnect', async () => {
+  if (!bridge || bridge.exitCode !== null) return true;
+  await bridgeRequest('disconnect', {}, 15000);
+  return true;
+});
+
+ipcMain.handle('mt5:symbols', async (_event, query) => {
+  const result = await bridgeRequest('symbols', { query: String(query || '') });
+  return result.symbols || [];
+});
+
+ipcMain.handle('mt5:subscribe', async (_event, symbol) => {
+  const result = await bridgeRequest('subscribe', { symbol: String(symbol || '') });
+  return result.quote;
+});
+
+ipcMain.handle('mt5:history', async (_event, symbol, timeframe) => {
+  const result = await bridgeRequest('history', { symbol: String(symbol || ''), timeframe: String(timeframe || '15M') });
+  return result.bars || [];
+});
+
+app.whenReady().then(createWindow);
+app.on('before-quit', () => {
+  try { if (bridge && bridge.exitCode === null) bridge.kill(); } catch (_) { /* best-effort cleanup */ }
+});
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

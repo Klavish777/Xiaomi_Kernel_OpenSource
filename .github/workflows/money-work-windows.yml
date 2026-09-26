@@ -19,6 +19,18 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Set up Python for the MT5 bridge
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build read-only MT5 connector
+        working-directory: money-work
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller MetaTrader5
+          pyinstaller --clean --noconfirm --collect-all MetaTrader5 --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

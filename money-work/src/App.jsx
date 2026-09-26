@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import packageJson from '../package.json';
 import {
   Activity, ArrowDownRight, ArrowUpRight, Bell, ChevronDown, CircleHelp,
@@ -52,7 +52,7 @@ function IconTile({ children, tone = 'blue' }) {
   return <span className={`icon-tile ${tone}`}>{children}</span>;
 }
 
-function MetricCard({ label, value, change, icon: Icon, tone, positive = true, note }) {
+function MetricCard({ label, value, change, icon: Icon, tone, positive = true, neutral = false, note }) {
   return (
     <article className="metric-card panel">
       <div className="metric-top">
@@ -61,8 +61,8 @@ function MetricCard({ label, value, change, icon: Icon, tone, positive = true, n
       </div>
       <div className="metric-value">{value}</div>
       <div className="metric-bottom">
-        <span className={`metric-change ${positive ? 'up' : 'down'}`}>
-          {positive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{change}
+        <span className={`metric-change ${neutral ? 'neutral' : positive ? 'up' : 'down'}`}>
+          {!neutral && (positive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />)}{change}
         </span>
         <span className="metric-note">{note}</span>
       </div>
@@ -77,9 +77,136 @@ function App() {
   const [demoRunning, setDemoRunning] = useState(false);
   const [riskEnabled, setRiskEnabled] = useState(true);
   const [modal, setModal] = useState('');
-  const series = useMemo(() => buildSeries(timeframe, selectedSymbol), [timeframe, selectedSymbol]);
-  const lastPrice = selectedSymbol === 'AUDCAD' ? '0.65482' : selectedSymbol === 'EURUSD' ? '1.08426' : '1.27194';
+  const [mt5Account, setMt5Account] = useState(null);
+  const [savedAccount, setSavedAccount] = useState(null);
+  const [quotes, setQuotes] = useState({});
+  const [historyBySymbol, setHistoryBySymbol] = useState({});
+  const [mt5Error, setMt5Error] = useState('');
+  const [connecting, setConnecting] = useState(false);
+  const [rememberAccount, setRememberAccount] = useState(false);
+  const [accountForm, setAccountForm] = useState({ login: '', password: '', server: '', terminalPath: '' });
+  const [symbolQuery, setSymbolQuery] = useState('AUDCAD');
+  const [symbolResults, setSymbolResults] = useState([]);
+  const liveQuote = quotes[selectedSymbol];
+  const baseSymbol = selectedSymbol.replace(/[^A-Z].*$/i, '');
+  const series = useMemo(() => {
+    const bars = historyBySymbol[selectedSymbol]?.[timeframe] || [];
+    const values = bars.length
+      ? bars.map((bar) => ({ time: new Date(bar.time * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }), price: bar.close }))
+      : buildSeries(timeframe, baseSymbol);
+    if (liveQuote) values[values.length - 1].price = (liveQuote.bid + liveQuote.ask) / 2;
+    return values;
+  }, [timeframe, baseSymbol, selectedSymbol, historyBySymbol, liveQuote]);
+  const lastPrice = liveQuote ? Number(liveQuote.bid).toFixed(5) : baseSymbol === 'AUDCAD' ? '0.65482' : baseSymbol === 'EURUSD' ? '1.08426' : '1.27194';
   const todayLabel = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase();
+
+  useEffect(() => {
+    if (!window.moneyWork) return undefined;
+    window.moneyWork.getSavedMt5Account().then((saved) => {
+      if (saved) {
+        setSavedAccount(saved);
+        setAccountForm((form) => ({ ...form, login: saved.login || '', server: saved.server || '', terminalPath: saved.terminalPath || '' }));
+      }
+    }).catch((error) => setMt5Error(error.message));
+    return window.moneyWork.onMt5Event((event) => {
+      if (event.type === 'tick') setQuotes((current) => ({ ...current, [event.symbol]: event }));
+      if (event.type === 'error' || event.type === 'warning' || event.type === 'fatal') setMt5Error(event.message || 'MT5 connector error');
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!window.moneyWork || !mt5Account || !selectedSymbol) return undefined;
+    let active = true;
+    window.moneyWork.getMt5History(selectedSymbol, timeframe).then((bars) => {
+      if (active) setHistoryBySymbol((current) => ({ ...current, [selectedSymbol]: { ...current[selectedSymbol], [timeframe]: bars } }));
+    }).catch((error) => {
+      if (active) setMt5Error(error.message);
+    });
+    return () => { active = false; };
+  }, [mt5Account, selectedSymbol, timeframe]);
+
+  async function subscribeInstrument(symbol, force = false) {
+    if (!window.moneyWork || (!mt5Account && !force)) return;
+    setMt5Error('');
+    try {
+      const query = symbol.replace(/[^A-Z].*$/i, '');
+      const names = await window.moneyWork.searchMt5Symbols(query);
+      const exact = names.find((name) => name.toUpperCase() === symbol.toUpperCase());
+      const match = exact || names.find((name) => name.toUpperCase().startsWith(query.toUpperCase()));
+      if (!match) throw new Error(`MT5 did not return a symbol matching ${query}. Check the broker's Market Watch.`);
+      setSelectedSymbol(match);
+      const quote = await window.moneyWork.subscribeMt5Symbol(match);
+      setQuotes((current) => ({ ...current, [match]: quote }));
+    } catch (error) {
+      setMt5Error(error.message);
+    }
+  }
+
+  async function searchInstruments(event) {
+    event?.preventDefault();
+    if (!window.moneyWork || !mt5Account) {
+      setMt5Error('Connect an MT5 account before searching its available instruments.');
+      return;
+    }
+    setMt5Error('');
+    try {
+      const names = await window.moneyWork.searchMt5Symbols(symbolQuery);
+      setSymbolResults(names);
+      if (!names.length) setMt5Error(`No MT5 symbols matched “${symbolQuery}”.`);
+    } catch (error) {
+      setMt5Error(error.message);
+    }
+  }
+
+  async function connectAccount(event) {
+    event?.preventDefault();
+    if (!window.moneyWork) {
+      setMt5Error('Account connection is available in the installed Windows app, not in the browser preview.');
+      return;
+    }
+    setConnecting(true);
+    setMt5Error('');
+    try {
+      const account = await window.moneyWork.connectMt5({ ...accountForm, remember: rememberAccount });
+      setMt5Account(account);
+      if (rememberAccount) setSavedAccount({ login: account.login, server: account.server, terminalPath: accountForm.terminalPath });
+      setModal('');
+      await subscribeInstrument('AUDCAD', true);
+    } catch (error) {
+      setMt5Error(error.message);
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function connectSavedAccount() {
+    if (!window.moneyWork) return;
+    setConnecting(true);
+    setMt5Error('');
+    try {
+      const account = await window.moneyWork.connectSavedMt5();
+      setMt5Account(account);
+      setModal('');
+      await subscribeInstrument('AUDCAD', true);
+    } catch (error) {
+      setMt5Error(error.message);
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function disconnectAccount() {
+    try {
+      if (window.moneyWork) await window.moneyWork.disconnectMt5();
+      setMt5Account(null);
+      setQuotes({});
+      setSelectedSymbol('AUDCAD');
+      setModal('');
+    } catch (error) {
+      setMt5Error(error.message);
+    }
+  }
+
 
   return (
     <div className="app-shell">
@@ -129,8 +256,10 @@ function App() {
         <header className="topbar">
           <div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><strong>{activeNav}</strong></div>
           <div className="topbar-actions">
-            <div className="environment-pill"><span className="pulse-dot" /> PAPER MODE</div>
-            <button className="connect-button" onClick={() => setModal('connect')}><Plus size={15} /> Connect account</button>
+            <div className={`environment-pill ${mt5Account ? 'connected' : ''}`}><span className="pulse-dot" /> {mt5Account ? 'MT5 READ-ONLY' : 'PAPER MODE'}</div>
+            <button className="connect-button" onClick={() => { setMt5Error(''); setModal('connect'); }}>
+              {mt5Account ? <><Activity size={15} /> {mt5Account.server}</> : <><Plus size={15} /> Add MT5 account</>}
+            </button>
             <button className="top-icon" aria-label="Search"><Search size={17} /></button>
             <button className="top-icon notification-button" aria-label="Notifications"><Bell size={17} /><i /></button>
             <div className="top-divider" />
@@ -139,8 +268,9 @@ function App() {
         </header>
 
         <div className="page-content">
+          {mt5Error && mt5Account && <div className="connector-banner"><ShieldCheck size={15} /> {mt5Error}<button onClick={() => setMt5Error('')}>Dismiss</button></div>}
           {activeNav !== 'Overview' && (
-            <div className="section-notice"><Sparkles size={16} /> {activeNav} is part of the Money Work workspace. This first build is a demo dashboard; no broker connection or live order execution is enabled.</div>
+            <div className="section-notice"><Sparkles size={16} /> {activeNav} is part of the Money Work workspace. MT5 quotes/account equity are read-only when connected; order execution is disabled in this build.</div>
           )}
           <div className="page-heading">
             <div>
@@ -155,10 +285,10 @@ function App() {
           </div>
 
           <section className="metrics-grid">
-            <MetricCard label="Demo balance" value="$12,845.20" change="4.8%" note="vs. last week" icon={Wallet} tone="blue" />
-            <MetricCard label="Today's P&L" value="+$284.50" change="2.26%" note="paper results" icon={TrendingUp} tone="green" />
-            <MetricCard label="Win rate" value="64.7%" change="3.2%" note="last 30 trades" icon={Gauge} tone="purple" />
-            <MetricCard label="Max drawdown" value="1.82%" change="0.4%" note="within your limit" icon={ShieldCheck} tone="amber" positive={false} />
+            <MetricCard label={mt5Account ? 'MT5 account equity' : 'Demo balance'} value={mt5Account ? `${mt5Account.currency} ${Number(mt5Account.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$12,845.20'} change={mt5Account ? 'Read-only' : '4.8%'} note={mt5Account ? `Account ${mt5Account.login}` : 'sample · vs. last week'} icon={Wallet} tone="blue" neutral={Boolean(mt5Account)} />
+            <MetricCard label="Paper P&L" value="+$284.50" change="2.26%" note="sample simulation" icon={TrendingUp} tone="green" />
+            <MetricCard label="Demo win rate" value="64.7%" change="3.2%" note="sample · last 30 trades" icon={Gauge} tone="purple" />
+            <MetricCard label="Demo max drawdown" value="1.82%" change="0.4%" note="sample value" icon={ShieldCheck} tone="amber" positive={false} />
           </section>
 
           <section className="primary-grid">
@@ -166,7 +296,7 @@ function App() {
               <div className="panel-heading chart-heading">
                 <div className="instrument-title">
                   <div className="pair-icon">{selectedSymbol.slice(0, 2)}</div>
-                  <div><div className="pair-name">{selectedSymbol} <ChevronDown size={14} /></div><span>Forex · Bybit MT5 CFD <i className="market-open-dot" /> Market open</span></div>
+                  <div><div className="pair-name">{selectedSymbol} <ChevronDown size={14} /></div><span>Forex · {mt5Account ? 'Live MT5 feed' : 'Bybit MT5 CFD'} <i className="market-open-dot" /> {mt5Account ? 'Connected' : 'Sample market'}</span></div>
                 </div>
                 <div className="chart-heading-right">
                   <div className="timeframe-switcher">
@@ -175,7 +305,7 @@ function App() {
                   <button className="chart-more" aria-label="Chart settings"><Settings2 size={16} /></button>
                 </div>
               </div>
-              <div className="price-row"><strong>{lastPrice}</strong><span className="price-change">+0.00273 <b>(+0.42%)</b></span><span className="price-meta">Bid 0.65479 <i /> Ask 0.65486</span></div>
+              <div className="price-row"><strong>{lastPrice}</strong><span className="price-change">{liveQuote ? 'REAL-TIME TICK' : '+0.00273 (sample)'}</span><span className="price-meta">Bid {liveQuote ? Number(liveQuote.bid).toFixed(5) : '0.65479'} <i /> Ask {liveQuote ? Number(liveQuote.ask).toFixed(5) : '0.65486'}</span></div>
               <div className="chart-legend"><span><i className="legend-line" /> {selectedSymbol}</span><span><i className="legend-ema" /> EMA 20</span><span className="chart-period">Broker time · UTC +0</span></div>
               <div className="chart-wrap">
                 <ResponsiveContainer width="100%" height="100%">
@@ -192,7 +322,7 @@ function App() {
                 </ResponsiveContainer>
                 <div className="chart-live-label"><span /> {lastPrice}</div>
               </div>
-              <div className="chart-foot"><span><i className="legend-dot blue-dot" /> Sample price series · illustrative only</span><span>Updated just now <span className="refresh-mark">↻</span></span></div>
+              <div className="chart-foot"><span><i className="legend-dot blue-dot" /> {liveQuote ? 'Live MT5 tick · polling every second' : 'Sample price series · illustrative only'}</span><span>{liveQuote ? new Date((liveQuote.time || Date.now() / 1000) * 1000).toLocaleTimeString() : 'Demo data'} <span className="refresh-mark">↻</span></span></div>
             </article>
 
             <article className="panel insight-panel">
@@ -219,14 +349,18 @@ function App() {
               <div className="panel-heading"><div><div className="section-kicker">MARKET WATCH</div><h2>Favorite instruments</h2></div><button className="add-small" onClick={() => setModal('instruments')}><Plus size={14} /> Add</button></div>
               <div className="table-head"><span>INSTRUMENT</span><span>LAST PRICE</span><span>24H CHANGE</span><span /></div>
               <div className="instrument-list">
-                {symbolRows.map((item) => (
-                  <button key={item.symbol} className={`instrument-row ${selectedSymbol === item.symbol ? 'chosen' : ''}`} onClick={() => setSelectedSymbol(item.symbol)}>
-                    <span className="instrument-cell"><span className={`currency-icon ${item.symbol}`}>{item.icon}</span><span><strong>{item.symbol}</strong><small>{item.name}</small></span></span>
-                    <strong className="row-price">{item.price}</strong>
-                    <span className={`row-change ${item.positive ? 'up' : 'down'}`}>{item.change}</span>
-                    <span className="mini-sparkline"><svg viewBox="0 0 80 25" preserveAspectRatio="none"><polyline points={item.positive ? '1,19 12,16 23,18 34,11 45,13 56,7 68,10 79,3' : '1,5 12,8 23,6 34,14 45,11 56,18 68,13 79,22'} /></svg></span>
-                  </button>
-                ))}
+                {symbolRows.map((item) => {
+                  const liveEntry = Object.entries(quotes).find(([symbol]) => symbol.toUpperCase().startsWith(item.symbol));
+                  const livePrice = liveEntry ? Number(liveEntry[1].bid).toFixed(5) : item.price;
+                  return (
+                    <button key={item.symbol} className={`instrument-row ${baseSymbol === item.symbol ? 'chosen' : ''}`} onClick={() => mt5Account ? subscribeInstrument(item.symbol) : setSelectedSymbol(item.symbol)}>
+                      <span className="instrument-cell"><span className={`currency-icon ${item.symbol}`}>{item.icon}</span><span><strong>{item.symbol}</strong><small>{item.name}</small></span></span>
+                      <strong className="row-price">{livePrice}</strong>
+                      <span className={`row-change ${item.positive ? 'up' : 'down'}`}>{liveEntry ? 'LIVE' : item.change}</span>
+                      <span className="mini-sparkline"><svg viewBox="0 0 80 25" preserveAspectRatio="none"><polyline points={item.positive ? '1,19 12,16 23,18 34,11 45,13 56,7 68,10 79,3' : '1,5 12,8 23,6 34,14 45,11 56,18 68,13 79,22'} /></svg></span>
+                    </button>
+                  );
+                })}
               </div>
               <button className="view-all-button" onClick={() => setActiveNav('Markets')}>View all markets <ArrowUpRight size={14} /></button>
             </article>
@@ -264,22 +398,49 @@ function App() {
             </article>
           </section>
 
-          <footer className="footer-note"><span><ShieldCheck size={13} /> Demo only · Numbers and charts are illustrative, not live market data.</span><span>Money Work <b>v{packageJson.version}</b><i /> Built for focused trading</span></footer>
+          <footer className="footer-note"><span><ShieldCheck size={13} /> {mt5Account ? 'MT5 quotes live · AI readout and positions remain sample data.' : 'Demo only · Numbers and charts are illustrative, not live market data.'}</span><span>Money Work <b>v{packageJson.version}</b><i /> Built for focused trading</span></footer>
         </div>
       </main>
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setModal('')}>
-        <div className="modal-card">
+        <div className={`modal-card ${modal === 'connect' ? 'account-modal' : ''}`}>
           <button className="modal-close" onClick={() => setModal('')}><X size={17} /></button>
           <div className="modal-icon"><LockKeyhole size={20} /></div>
-          <span className="section-kicker">SAFE DEMO MODE</span>
-          <h2>{modal === 'connect' ? 'Broker connection comes later' : modal === 'instruments' ? 'Instrument watchlist' : 'Demo workspace'}</h2>
-          <p>{modal === 'connect'
-            ? 'This first dashboard is intentionally disconnected. We will add a secure Bybit MT5 CFD connector after the paper-trading flow and risk controls are validated. Do not enter account credentials here.'
-            : modal === 'instruments'
-              ? 'The current watchlist is illustrative. Broker symbols and market data will be loaded from the account connector in a later version.'
-              : 'All balances, signals and positions shown here are sample data. The simulation does not send orders or connect to a trading account.'}</p>
-          <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>Close</button><button className="modal-primary" onClick={() => { setModal(''); setActiveNav('Risk controls'); }}>Review safety panel</button></div>
+          {modal === 'connect' ? <>
+            <span className="section-kicker">READ-ONLY MT5 CONNECTION</span>
+            <h2>{mt5Account ? 'Account connected' : 'Add Bybit MT5 account'}</h2>
+            {mt5Account ? <>
+              <p>Connected to <strong>{mt5Account.server}</strong> as account <strong>{mt5Account.login}</strong>. Money Work reads equity and quotes only; no orders can be sent.</p>
+              <div className="account-summary"><span>Equity</span><strong>{mt5Account.currency} {Number(mt5Account.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><span>Leverage</span><strong>1:{mt5Account.leverage}</strong></div>
+              <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>Close</button><button className="modal-danger" onClick={disconnectAccount}>Disconnect</button></div>
+            </> : <>
+              <p>Use your Bybit MT5 CFD account details from the MetaTrader 5 terminal. Credentials are sent only to the local read-only connector.</p>
+              <form className="account-form" onSubmit={connectAccount}>
+                <label>MT5 account number<input autoComplete="username" inputMode="numeric" value={accountForm.login} onChange={(event) => setAccountForm({ ...accountForm, login: event.target.value })} placeholder="Account login" required /></label>
+                <label>MT5 server<input value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="Choose the exact server shown in MT5" required /></label>
+                <label>MT5 investor / read-only password<input type="password" autoComplete="current-password" value={accountForm.password} onChange={(event) => setAccountForm({ ...accountForm, password: event.target.value })} placeholder="Use investor password when available" required /></label>
+                <label>MT5 terminal path <span className="field-optional">optional</span><input value={accountForm.terminalPath} onChange={(event) => setAccountForm({ ...accountForm, terminalPath: event.target.value })} placeholder="Auto-detect, or C:\\Program Files\\...\\terminal64.exe" /></label>
+                <label className="remember-row"><input type="checkbox" checked={rememberAccount} onChange={(event) => setRememberAccount(event.target.checked)} /><span>Remember on this PC <small>Encrypt credentials with Windows secure storage.</small></span></label>
+                {savedAccount && <button className="saved-account-button" type="button" onClick={connectSavedAccount} disabled={connecting}>Reconnect saved account {savedAccount.login} · {savedAccount.server}</button>}
+                {mt5Error && <div className="connection-error">{mt5Error}</div>}
+                <div className="modal-actions"><button className="modal-secondary" type="button" onClick={() => setModal('')}>Cancel</button><button className="modal-primary" type="submit" disabled={connecting}>{connecting ? 'Connecting…' : 'Connect read-only'}</button></div>
+              </form>
+              <div className="secure-note"><ShieldCheck size={13} /> Never share account passwords or API keys in chat.</div>
+            </>}
+          </> : modal === 'instruments' ? <>
+            <span className="section-kicker">MT5 MARKET WATCH</span>
+            <h2>Find an instrument</h2>
+            <p>Search exact symbols available from your connected MT5 broker. Broker suffixes such as <strong>AUDCAD+</strong> are supported.</p>
+            <form className="symbol-search-form" onSubmit={searchInstruments}><input value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value)} placeholder="AUDCAD" /><button className="modal-primary" type="submit">Search</button></form>
+            <div className="symbol-results">{symbolResults.map((symbol) => <button key={symbol} onClick={async () => { await subscribeInstrument(symbol); setModal(''); }}><span>{symbol}</span><ArrowUpRight size={14} /></button>)}</div>
+            {mt5Error && <div className="connection-error">{mt5Error}</div>}
+            <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>Close</button></div>
+          </> : <>
+            <span className="section-kicker">SAFE DEMO MODE</span>
+            <h2>{modal === 'profile' ? 'Local demo profile' : 'Demo workspace'}</h2>
+            <p>Sample balances, signals and paper positions are illustrative. Only account equity and the selected MT5 quote become live after a read-only connection; live order execution is not available.</p>
+            <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>Close</button><button className="modal-primary" onClick={() => { setModal(''); setActiveNav('Risk controls'); }}>Review safety panel</button></div>
+          </>}
         </div>
       </div>}
     </div>
