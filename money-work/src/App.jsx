@@ -4,13 +4,10 @@ import {
   Activity, ArrowUpRight, Bell, ChevronDown, CircleHelp,
   Clock3, Command, LayoutDashboard, LockKeyhole,
   MoreHorizontal, Plus, Search, ShieldCheck,
-  Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
+  Brain, Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
   Globe, Bot, Play, Pause, CircleCheck,
 } from 'lucide-react';
-import { adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, summarizePaperHistory, validateReferencePayload } from './agentCore.mjs';
-import {
-  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from 'recharts';
+import { adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, movingAverageValues, sliceChartHistory, summarizePaperHistory, validateReferencePayload } from './agentCore.mjs';
 
 const navItems = [
   { label: 'Overview', icon: LayoutDashboard },
@@ -52,6 +49,20 @@ const copy = {
   },
 };
 
+const strategyCatalog = [
+  { id: 'ema-cross', group: 'trend', name: 'EMA + RSI', ru: 'Пересечение EMA(20/50) с фильтром RSI(14); текущая стратегия агента.', en: 'EMA(20/50) crossover with RSI(14) filter; the agent’s current strategy.', method: 'EMA' },
+  { id: 'rsi-reversion', group: 'range', name: 'RSI mean reversion', ru: 'Ищет возврат после экстремальных значений RSI; полезна только при боковом рынке.', en: 'Looks for reversals after RSI extremes; intended for range-bound conditions.', method: 'RSI' },
+  { id: 'bollinger', group: 'range', name: 'Bollinger Bands', ru: 'Возврат внутрь полос после выхода за границу, с подтверждением волатильности.', en: 'Mean reversion inside the bands after an outer-band move, volatility-confirmed.', method: 'Bands' },
+  { id: 'macd', group: 'trend', name: 'MACD momentum', ru: 'Пересечение линии MACD и сигнальной линии для оценки импульса тренда.', en: 'MACD and signal-line crossovers to assess trend momentum.', method: 'MACD' },
+  { id: 'donchian', group: 'breakout', name: 'Donchian breakout', ru: 'Пробой максимума/минимума заданного окна; фильтр ложных пробоев обязателен.', en: 'Break of a lookback high/low; false-breakout filtering is essential.', method: 'Donchian' },
+  { id: 'atr-breakout', group: 'breakout', name: 'ATR channel breakout', ru: 'Выход из диапазона, масштабированного ATR; стоп учитывает волатильность.', en: 'Range break scaled by ATR, with volatility-aware risk sizing.', method: 'ATR' },
+  { id: 'adx-trend', group: 'trend', name: 'ADX trend filter', ru: 'ADX оценивает силу тренда, а EMA или DI задают направление.', en: 'ADX measures trend strength while EMA or DI supplies direction.', method: 'ADX' },
+  { id: 'sr-breakout', group: 'breakout', name: 'Support / resistance', ru: 'Пробой или отбой от уровней, рассчитанных по истории; подтверждение закрытием бара.', en: 'Break or rejection at historical levels, confirmed by a bar close.', method: 'Levels' },
+  { id: 'session-range', group: 'session', name: 'Session range', ru: 'Диапазон выбранной сессии с проверкой спреда и времени публикации новостей.', en: 'Session-range setups filtered by spread and scheduled news risk.', method: 'Session' },
+  { id: 'price-action', group: 'price', name: 'Price action', ru: 'Пин-бары и поглощение у уровней; свечной паттерн сам по себе не подтверждает сделку.', en: 'Pin bars and engulfing patterns near levels; a candle pattern alone is not confirmation.', method: 'Candles' },
+  { id: 'carry', group: 'macro', name: 'Carry / swap context', ru: 'Сравнивает ставки переноса брокера; долгосрочный контекст, не внутридневный сигнал.', en: 'Uses broker swap/rollover data as longer-term context, not an intraday signal.', method: 'Swap' },
+];
+
 const PAPER_STORAGE_KEY = 'money-work-paper-agent-v2';
 const LEGACY_PAPER_STORAGE_KEY = 'money-work-paper-agent-v1';
 const REFERENCE_STORAGE_KEY = 'money-work-audcad-reference-v1';
@@ -76,6 +87,47 @@ function readReference() {
   } catch { return null; }
 }
 
+function PricePlot({ bars, symbol, style, period, averageType, showAverage }) {
+  const width = 1000;
+  const height = 280;
+  const pad = { top: 12, right: 70, bottom: 24, left: 10 };
+  if (!bars.length) return null;
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const averages = movingAverageValues(bars, period, averageType);
+  const values = bars.flatMap((bar) => [Number(bar.high), Number(bar.low)]).concat(showAverage ? averages.filter(Number.isFinite) : []);
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (max === min) { max += 0.0001; min -= 0.0001; }
+  const y = (value) => pad.top + ((max - value) / (max - min)) * plotHeight;
+  const step = plotWidth / bars.length;
+  const x = (index) => pad.left + step * (index + 0.5);
+  const linePath = bars.map((bar, index) => `${index ? 'L' : 'M'} ${x(index)} ${y(bar.close)}`).join(' ');
+  const averagePath = averages.map((value, index) => Number.isFinite(value) ? `${index && Number.isFinite(averages[index - 1]) ? 'L' : 'M'} ${x(index)} ${y(value)}` : '').filter(Boolean).join(' ');
+  const priceFormat = (value) => Number(value).toFixed(5);
+  return <svg className="price-plot-svg" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${symbol} historical price chart`}>
+    {[0, 1, 2, 3].map((tick) => { const value = max - ((max - min) * tick / 3); const yPos = pad.top + plotHeight * tick / 3; return <g key={tick}><line x1={pad.left} x2={width - pad.right + 8} y1={yPos} y2={yPos} stroke="#252a36" strokeDasharray="3 5" /><text x={width - pad.right + 13} y={yPos + 3} fill="#8792a4" fontSize="10">{priceFormat(value)}</text></g>; })}
+    {style === 'line' ? <path d={linePath} fill="none" stroke="#78a6ff" strokeWidth="2" /> : bars.map((bar, index) => {
+      const rising = Number(bar.close) >= Number(bar.open);
+      const candleX = x(index);
+      const bodyTop = y(Math.max(bar.open, bar.close));
+      const bodyBottom = y(Math.min(bar.open, bar.close));
+      const candleWidth = Math.max(2, Math.min(10, step * 0.66));
+      return <g key={`${bar.time}-${index}`} className={rising ? 'candle-up' : 'candle-down'}><title>{new Date(Number(bar.time) * 1000).toLocaleString()} · O {priceFormat(bar.open)} H {priceFormat(bar.high)} L {priceFormat(bar.low)} C {priceFormat(bar.close)}</title><line x1={candleX} x2={candleX} y1={y(bar.high)} y2={y(bar.low)} stroke="currentColor" strokeWidth="1.2" /><rect x={candleX - candleWidth / 2} y={bodyTop} width={candleWidth} height={Math.max(1.5, bodyBottom - bodyTop)} rx="0.7" fill="currentColor" /></g>;
+    })}
+    {showAverage && averagePath && <path d={averagePath} fill="none" stroke="#e3b765" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />}
+    {[0, 1, 2, 3, 4].map((tick) => { const index = Math.min(bars.length - 1, Math.round(tick * (bars.length - 1) / 4)); return <text key={tick} x={x(index)} y={height - 5} textAnchor="middle" fill="#808b9d" fontSize="9">{new Date(Number(bars[index].time) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</text>; })}
+  </svg>;
+}
+
+function AnimatedBrain({ small = false }) {
+  return <span className={`brain-art ${small ? 'small' : ''}`} aria-hidden="true"><Brain size={small ? 15 : 22} strokeWidth={1.6} /><i /><b /></span>;
+}
+
+function MinerIcon({ small = false }) {
+  return <span className={`miner-art ${small ? 'small' : ''}`} aria-hidden="true"><i className="miner-helmet" /><i className="miner-face" /><i className="miner-body" /><b className="miner-pickaxe">⛏</b><b className="miner-spark">✦</b></span>;
+}
+
 function App() {
   const [language, setLanguage] = useState(() => localStorage.getItem('money-work-language') || 'ru');
   const [recentServers, setRecentServers] = useState(() => {
@@ -88,6 +140,15 @@ function App() {
   const t = (key) => copy[language]?.[key] || copy.en[key] || key;
   const l = (ru, en) => language === 'ru' ? ru : en;
   const [timeframe, setTimeframe] = useState('15M');
+  const [chartStyle, setChartStyle] = useState('candles');
+  const [showMovingAverage, setShowMovingAverage] = useState(true);
+  const [movingAveragePeriod, setMovingAveragePeriod] = useState(20);
+  const [movingAverageType, setMovingAverageType] = useState('SMA');
+  const [visibleBarCount, setVisibleBarCount] = useState(80);
+  const [olderBarsOffset, setOlderBarsOffset] = useState(0);
+  const chartDrag = useRef(null);
+  const [strategyFilter, setStrategyFilter] = useState('all');
+  const [selectedStrategy, setSelectedStrategy] = useState('ema-cross');
   const [activeNav, setActiveNav] = useState('Overview');
   const [selectedSymbol, setSelectedSymbol] = useState('AUDCAD');
   const [modal, setModal] = useState('');
@@ -122,12 +183,19 @@ function App() {
   const paperLastQuoteTime = useRef(0);
   const brokerEvaluateBusy = useRef(false);
   const liveQuote = quotes[selectedSymbol];
-  const series = useMemo(() => {
-    const bars = historyBySymbol[selectedSymbol]?.[timeframe] || [];
-    const values = bars.map((bar) => ({ time: new Date(bar.time * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }), price: bar.close }));
-    if (liveQuote && values.length) values[values.length - 1].price = (liveQuote.bid + liveQuote.ask) / 2;
-    return values;
+  const chartHistory = useMemo(() => {
+    const bars = (historyBySymbol[selectedSymbol]?.[timeframe] || []).map((bar) => ({
+      ...bar,
+      open: Number(bar.open), high: Number(bar.high), low: Number(bar.low), close: Number(bar.close),
+    }));
+    if (liveQuote && bars.length) {
+      const last = bars.length - 1;
+      const mid = (Number(liveQuote.bid) + Number(liveQuote.ask)) / 2;
+      bars[last] = { ...bars[last], close: mid, high: Math.max(bars[last].high, mid), low: Math.min(bars[last].low, mid) };
+    }
+    return bars;
   }, [timeframe, selectedSymbol, historyBySymbol, liveQuote]);
+  const visibleChartBars = useMemo(() => sliceChartHistory(chartHistory, olderBarsOffset, visibleBarCount), [chartHistory, olderBarsOffset, visibleBarCount]);
   const referenceGapBps = referenceData && liveQuote && /^AUDCAD/i.test(selectedSymbol)
     ? (((Number(liveQuote.bid) + Number(liveQuote.ask)) / 2 / Number(referenceData.rate)) - 1) * 10000
     : null;
@@ -206,6 +274,7 @@ function App() {
       const match = exact || names.find((name) => name.toUpperCase().startsWith(query.toUpperCase()));
       if (!match) throw new Error(`MT5 did not return a symbol matching ${query}. Check the broker's Market Watch.`);
       setSelectedSymbol(match);
+      setOlderBarsOffset(0);
       const quote = await window.moneyWork.subscribeMt5Symbol(match);
       setQuotes((current) => ({ ...current, [match]: quote }));
     } catch (error) {
@@ -339,7 +408,7 @@ function App() {
       }).then((result) => {
         const consensus = buildAnalystConsensus({ analysis, quote: liveQuote, referenceData, brokerStatus: result });
         setBrokerAgentStatus({ ...result, consensus });
-        if (['position_opened', 'position_closed', 'daily_loss_stop'].includes(result.state)) {
+        if (['position_opened', 'position_closed', 'profit_target_closed', 'daily_loss_stop'].includes(result.state)) {
           refreshPositionsNow();
           refreshDealsNow();
         }
@@ -507,6 +576,32 @@ function App() {
     setPaperAgent(result.state);
   }
 
+  function shiftChart(offsetDelta) {
+    setOlderBarsOffset((current) => Math.max(0, Math.min(Math.max(0, chartHistory.length - visibleBarCount), current + offsetDelta)));
+  }
+
+  function handleChartPointerDown(event) {
+    chartDrag.current = { x: event.clientX, offset: olderBarsOffset };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handleChartPointerMove(event) {
+    if (!chartDrag.current) return;
+    const delta = Math.round(((chartDrag.current.x - event.clientX) / Math.max(1, event.currentTarget.clientWidth)) * visibleBarCount);
+    setOlderBarsOffset(Math.max(0, Math.min(Math.max(0, chartHistory.length - visibleBarCount), chartDrag.current.offset + delta)));
+  }
+
+  function endChartPointer(event) {
+    chartDrag.current = null;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  function handleChartWheel(event) {
+    event.preventDefault();
+    const direction = Math.sign(event.deltaX || event.deltaY);
+    shiftChart(direction * Math.max(3, Math.round(visibleBarCount * 0.12)));
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -580,14 +675,14 @@ function App() {
               <article className="summary-card panel"><span>{l('Открытые позиции', 'Open positions')}</span><strong>{mt5Account ? positions.length : '—'}</strong><small>{accountDataLoading ? l('Обновление…', 'Refreshing…') : mt5Account ? l('Данные MT5', 'MT5 account data') : l('Подключите счёт MT5', 'Connect an MT5 account')}</small></article>
             </section>
             <article className="panel chart-panel dashboard-chart">
-              <div className="panel-heading chart-heading"><div className="instrument-title"><div className="pair-icon">{selectedSymbol.slice(0, 2)}</div><div><div className="pair-name">{selectedSymbol}</div><span>{liveQuote ? l('Живой поток MT5', 'Live MT5 feed') : l('Ожидание котировок MT5', 'Waiting for MT5 quotes')}</span></div></div><div className="timeframe-switcher">{['1M', '5M', '15M', '1H'].map((frame) => <button key={frame} onClick={() => setTimeframe(frame)} className={timeframe === frame ? 'selected' : ''}>{frame}</button>)}</div></div>
+              <div className="panel-heading chart-heading"><div className="instrument-title"><div className="pair-icon">{selectedSymbol.slice(0, 2)}</div><div><div className="pair-name">{selectedSymbol}</div><span>{liveQuote ? l('Живой поток MT5', 'Live MT5 feed') : l('Ожидание котировок MT5', 'Waiting for MT5 quotes')}</span></div></div><div className="chart-control-bar"><div className="timeframe-switcher">{['1M', '5M', '15M', '1H'].map((frame) => <button key={frame} onClick={() => { setTimeframe(frame); setOlderBarsOffset(0); }} className={timeframe === frame ? 'selected' : ''}>{frame}</button>)}</div><div className="chart-edit-tools"><button title={l('Показать более ранние свечи', 'Show older candles')} onClick={() => shiftChart(Math.max(5, Math.round(visibleBarCount * 0.65)))}>←</button><button title={l('Показать более новые свечи', 'Show newer candles')} onClick={() => shiftChart(-Math.max(5, Math.round(visibleBarCount * 0.65)))}>→</button><button title={l('Увеличить масштаб', 'Zoom in')} onClick={() => setVisibleBarCount((count) => Math.max(20, count - 10))}>−</button><button title={l('Уменьшить масштаб', 'Zoom out')} onClick={() => setVisibleBarCount((count) => Math.min(240, count + 10))}>＋</button><select aria-label={l('Стиль графика', 'Chart style')} value={chartStyle} onChange={(event) => setChartStyle(event.target.value)}><option value="candles">{l('Свечи', 'Candles')}</option><option value="line">{l('Линия', 'Line')}</option></select><label className="ma-editor"><input type="checkbox" checked={showMovingAverage} onChange={(event) => setShowMovingAverage(event.target.checked)} /><select aria-label={l('Тип средней скользящей', 'Moving average type')} value={movingAverageType} onChange={(event) => setMovingAverageType(event.target.value)}><option>SMA</option><option>EMA</option></select><input aria-label={l('Период средней скользящей', 'Moving average period')} type="number" min="2" max="200" value={movingAveragePeriod} onChange={(event) => setMovingAveragePeriod(Math.max(2, Math.min(200, Number(event.target.value) || 2)))} /></label></div></div></div>
               <div className="price-row"><strong>{liveQuote ? Number(liveQuote.bid).toFixed(5) : '—'}</strong><span className="price-change">{liveQuote ? 'LIVE' : l('НЕТ ДАННЫХ', 'NO DATA')}</span>{liveQuote && <span className="price-meta">Bid {Number(liveQuote.bid).toFixed(5)} · Ask {Number(liveQuote.ask).toFixed(5)}</span>}</div>
-              {series.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={series} margin={{ top: 14, right: 10, left: 0, bottom: 0 }}><defs><linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#75a7ff" stopOpacity={0.2} /><stop offset="95%" stopColor="#75a7ff" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#252a36" strokeDasharray="3 5" vertical={false} /><XAxis dataKey="time" tick={{ fill: '#8b96a8', fontSize: 10 }} tickLine={false} axisLine={false} interval="preserveStartEnd" /><YAxis orientation="right" domain={['auto', 'auto']} tick={{ fill: '#8b96a8', fontSize: 10 }} tickLine={false} axisLine={false} width={64} /><Tooltip contentStyle={{ background: '#171b25', border: '1px solid #2b3242', borderRadius: 10, color: '#ecf1fa', fontSize: 12 }} formatter={(value) => [Number(value).toFixed(5), selectedSymbol]} /><Area type="monotone" dataKey="price" stroke="#78a6ff" strokeWidth={2} fill="url(#priceFill)" /></AreaChart></ResponsiveContainer></div> : <div className="empty-chart"><Activity size={22} /><strong>{l('График пока пуст', 'No chart data yet')}</strong><span>{mt5Account ? l('Выберите доступный символ на вкладке «Рынки».', 'Choose a broker symbol on the Markets tab.') : l('Подключите демо- или live-счёт MT5, чтобы загрузить рынки.', 'Connect an MT5 demo or live account to load markets.')}</span></div>}
+              {visibleChartBars.length ? <div className="chart-wrap chart-pan-area" onPointerDown={handleChartPointerDown} onPointerMove={handleChartPointerMove} onPointerUp={endChartPointer} onPointerCancel={endChartPointer} onWheel={handleChartWheel} title={l('Перетаскивайте график, прокручивайте для перемещения по истории', 'Drag the chart or scroll to pan through history')}><PricePlot bars={visibleChartBars} symbol={selectedSymbol} style={chartStyle} period={movingAveragePeriod} averageType={movingAverageType} showAverage={showMovingAverage} /></div> : <div className="empty-chart"><Activity size={22} /><strong>{l('График пока пуст', 'No chart data yet')}</strong><span>{mt5Account ? l('Выберите доступный символ на вкладке «Рынки».', 'Choose a broker symbol on the Markets tab.') : l('Подключите демо- или live-счёт MT5, чтобы загрузить рынки.', 'Connect an MT5 demo or live account to load markets.')}</span></div>}
               <div className="chart-foot"><span><i className="legend-dot blue-dot" />{liveQuote ? l('Котировка обновляется через MT5', 'Quote received from MT5') : l('Демо-данные не подставляются', 'No sample prices are shown')}</span><span>{liveQuote ? new Date((liveQuote.time || Date.now() / 1000) * 1000).toLocaleTimeString() : '—'}</span></div>
             </article>
             <section className="analysis-agent-grid">
               <article className="panel work-card">
-                <div className="work-card-heading"><div><span className="section-kicker"><Sparkles size={14} /> {l('АНАЛИЗ РЫНКА', 'MARKET ANALYSIS')}</span><h2>{l('Технический анализатор', 'Technical analyzer')}</h2></div><span className="status-badge">{analysis ? l('MT5 ДАННЫЕ', 'MT5 DATA') : l('ОЖИДАЕТ', 'WAITING')}</span></div>
+                <div className="work-card-heading"><div><span className="section-kicker"><AnimatedBrain small /> {l('АНАЛИЗ РЫНКА', 'MARKET ANALYSIS')}</span><h2>{l('Технический анализатор', 'Technical analyzer')}</h2></div><span className="status-badge">{analysis ? l('MT5 ДАННЫЕ', 'MT5 DATA') : l('ОЖИДАЕТ', 'WAITING')}</span></div>
                 {analysis ? <><div className="analysis-signal"><strong>{analysis.signal}</strong><span>{selectedSymbol} · {analysis.trend}</span></div><div className="analysis-stats"><div><small>RSI (14)</small><strong>{analysis.rsi.toFixed(1)}</strong></div><div><small>EMA trend</small><strong>{analysis.trend}</strong></div><div><small>{l('Последняя цена', 'Last close')}</small><strong>{analysis.price.toFixed(5)}</strong></div></div><p className="muted-copy">{l('Сигнал рассчитан по доступным барам MT5; это индикатор, а не прогноз или гарантия результата.', 'Computed from available MT5 bars; this is an indicator, not a forecast or guarantee.')}</p></> : <div className="empty-inline">{l('Для расчёта нужны минимум 50 реальных баров MT5. Подключите счёт и выберите рынок.', 'At least 50 real MT5 bars are required. Connect an account and select a market.')}</div>}
               </article>
               <article className="panel work-card agent-card">
@@ -598,7 +693,7 @@ function App() {
               </article>
             </section>
             <section className="panel paper-overview-row">
-              <div className="paper-overview-icon"><Bot size={19} /></div>
+              <div className="paper-overview-icon"><MinerIcon small /></div>
               <div className="paper-overview-copy"><span className="section-kicker">{executionMode === 'paper' ? 'AUTOPILOT · PAPER' : mt5Account?.accountType === 'real' ? 'AUTOPILOT · LIVE' : 'AUTOPILOT · MT5 DEMO'}</span><strong>{l('Автоматический агент AUDCAD', 'AUDCAD auto agent')}</strong><small>{paperAgent.enabled ? l('Активен. Проверяет свежий тик каждые 2 секунды, действует в заданном расписании.', 'Active. Evaluates fresh ticks every 2 seconds within your schedule.') : l('Остановлен. Без ручного запуска ордера не отправляются.', 'Paused. No orders are sent until you start it.')}</small></div>
               <span className={`status-badge ${paperAgent.enabled ? '' : 'muted'}`}>{paperAgent.enabled ? l('АКТИВЕН', 'ACTIVE') : l('ПАУЗА', 'PAUSED')}</span>
               <button className="secondary-action" onClick={startOrPauseAgent}>{paperAgent.enabled ? <Pause size={14} /> : <Play size={14} />}{paperAgent.enabled ? l('Пауза', 'Pause') : l('Запустить', 'Start')}</button>
@@ -627,9 +722,9 @@ function App() {
               </article>
 
               <article className="panel agent-control-card paper-control-card compact-agent-card">
-                <div className="agent-control-heading"><div><span className="section-kicker"><Bot size={14} /> {l('АВТОМАТИЧЕСКИЙ АГЕНТ · AUDCAD', 'AUTOMATED AGENT · AUDCAD')}</span><h2>{executionMode === 'paper' ? l('Paper-симуляция', 'Paper simulation') : mt5Account?.accountType === 'real' ? l('Исполнение MT5 Live', 'MT5 Live execution') : l('Исполнение MT5 Demo', 'MT5 Demo execution')}</h2></div><span className={`status-badge ${paperAgent.enabled ? (executionMode === 'mt5' && mt5Account?.accountType === 'real' ? 'live-risk-badge' : '') : 'muted'}`}>{paperAgent.enabled ? l('РАБОТАЕТ', 'RUNNING') : l('ПАУЗА', 'PAUSED')}</span></div>
+                <div className="agent-control-heading"><div><span className="section-kicker"><MinerIcon small /> {l('АВТОМАТИЧЕСКИЙ АГЕНТ · AUDCAD', 'AUTOMATED AGENT · AUDCAD')}</span><h2>{executionMode === 'paper' ? l('Paper-симуляция', 'Paper simulation') : mt5Account?.accountType === 'real' ? l('Исполнение MT5 Live', 'MT5 Live execution') : l('Исполнение MT5 Demo', 'MT5 Demo execution')}</h2></div><span className={`status-badge ${paperAgent.enabled ? (executionMode === 'mt5' && mt5Account?.accountType === 'real' ? 'live-risk-badge' : '') : 'muted'}`}>{paperAgent.enabled ? l('РАБОТАЕТ', 'RUNNING') : l('ПАУЗА', 'PAUSED')}</span></div>
                 <div className="execution-mode-picker"><button className={executionMode === 'paper' ? 'selected' : ''} onClick={() => { setExecutionMode('paper'); setLiveTradeConfirmed(false); }} disabled={paperAgent.enabled}>{l('Paper', 'Paper')}</button><button className={executionMode === 'mt5' ? 'selected' : ''} onClick={() => { setExecutionMode('mt5'); setLiveTradeConfirmed(false); }} disabled={paperAgent.enabled || !mt5Account || !['demo', 'real'].includes(mt5Account.accountType)}>{mt5Account?.accountType === 'real' ? 'MT5 LIVE' : mt5Account?.accountType === 'demo' ? 'MT5 DEMO' : 'MT5'}</button></div>
-                <div className={`paper-warning ${executionMode === 'mt5' && mt5Account?.accountType === 'real' ? 'live-warning' : ''}`}><ShieldCheck size={15} /><span>{executionMode === 'paper' ? l('PAPER: виртуальные сделки. Депозит и снятие меняют только локальный CAD-баланс.', 'PAPER: virtual trades only. Deposit/withdraw adjusts the local CAD balance.') : mt5Account?.accountType === 'real' ? l('LIVE: реальные ордера возможны. Лимиты: ≤0,01 лота, 1 позиция, SL 20 / TP 30 пипсов, дневной стоп 1%.', 'LIVE: real orders can be placed. Caps: ≤0.01 lot, 1 position, SL 20 / TP 30 pips, 1% daily stop.') : l('DEMO: ордера будут отправлены на учебный MT5-счёт. Лимиты: ≤0,01 лота, SL 20 / TP 30 пипсов, дневной стоп 1%.', 'DEMO: orders will be sent to the MT5 demo account. Caps: ≤0.01 lot, SL 20 / TP 30 pips, 1% daily stop.')}</span></div>
+                <div className={`paper-warning ${executionMode === 'mt5' && mt5Account?.accountType === 'real' ? 'live-warning' : ''}`}><ShieldCheck size={15} /><span>{executionMode === 'paper' ? l('PAPER: виртуальные сделки. Депозит и снятие меняют только локальный CAD-баланс.', 'PAPER: virtual trades only. Deposit/withdraw adjusts the local CAD balance.') : mt5Account?.accountType === 'real' ? l('LIVE: реальные ордера возможны. Лимиты: ≤0,01 лота, фиксация от 0,30 валюты счёта на 0,01 лота, SL 20 / TP 30 пипсов, дневной стоп 1%.', 'LIVE: real orders can be placed. Caps: ≤0.01 lot; cash-profit close from 0.30 account-currency units per 0.01 lot; SL 20 / TP 30 pips; 1% daily stop.') : l('DEMO: ордера будут отправлены на учебный MT5-счёт. Лимиты: ≤0,01 лота, фиксация от 0,30 валюты счёта на 0,01 лота, SL 20 / TP 30 пипсов, дневной стоп 1%.', 'DEMO: orders go to the MT5 demo account. Caps: ≤0.01 lot; cash-profit close from 0.30 account-currency units per 0.01 lot; SL 20 / TP 30 pips; 1% daily stop.')}</span></div>
                 {executionMode === 'paper' ? <>
                   <div className="paper-config-grid compact-paper-fields">
                     <label>{l('Виртуальный баланс · CAD', 'Virtual balance · CAD')}<input type="number" min="1" max="10000000" step="50" value={paperAgent.capital} onChange={(event) => setPaperAgent((current) => ({ ...current, capital: Math.min(10000000, Math.max(1, Number(event.target.value) || 1)) }))} /></label>
@@ -668,15 +763,12 @@ function App() {
             {!mt5Account ? <div className="empty-state"><Clock3 size={28} /><h2>{l('Подключите MT5 для загрузки истории', 'Connect MT5 to load history')}</h2><button className="connect-button" onClick={() => setModal('connect')}><Plus size={15} /> {l('Подключить счёт', 'Connect account')}</button></div> : deals.length ? <div className="data-table-wrap"><table className="data-table"><thead><tr><th>{l('Время', 'Time')}</th><th>{l('Инструмент', 'Instrument')}</th><th>{l('Тип', 'Type')}</th><th>{l('Объём', 'Volume')}</th><th>{l('Цена', 'Price')}</th><th>{l('Результат', 'Net result')}</th><th>{l('Комментарий', 'Comment')}</th></tr></thead><tbody>{[...deals].reverse().map((deal) => { const net = deal.profit + deal.commission + deal.swap; return <tr key={deal.ticket}><td>{new Date(deal.time * 1000).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')}</td><td><strong>{deal.symbol || '—'}</strong></td><td>{deal.type}</td><td>{deal.volume}</td><td>{deal.price}</td><td className={net >= 0 ? 'positive-text' : 'negative-text'}>{net.toFixed(2)} {mt5Account.currency}</td><td>{deal.comment || '—'}</td></tr>; })}</tbody></table></div> : <div className="empty-state"><Clock3 size={28} /><h2>{l('В выбранном периоде сделок нет', 'No deals in selected period')}</h2></div>}
           </section>}
 
-          {activeNav === 'Strategies' && <section className="page-section">
-            <div className="section-page-heading"><div><span className="section-kicker">RESEARCH LIBRARY</span><h1>{l('Библиотека стратегий', 'Strategy library')}</h1><p>{l('Набор базовых подходов для тестирования; это не все стратегии и не обещание доходности.', 'A starter set of common approaches to test; not every strategy and not a profit guarantee.')}</p></div></div>
-            <div className="strategy-grid">{[
-              ['EMA crossover', l('Следование за трендом: пересечение быстрой и медленной EMA.', 'Trend following: fast/slow EMA crossover.')],
-              ['RSI mean reversion', l('Контртрендовый вход по зонам перекупленности/перепроданности.', 'Countertrend setup using overbought/oversold zones.')],
-              ['Range breakout', l('Пробой диапазона с фильтром волатильности и подтверждением закрытия бара.', 'Range breakout with volatility filter and bar-close confirmation.')],
-              ['Session momentum', l('Сравнение волатильности и импульса в выбранной торговой сессии.', 'Compare volatility and momentum during a selected trading session.')],
-            ].map(([name, description]) => <article className="panel strategy-card" key={name}><span className="strategy-mark"><Sparkles size={15} /></span><h2>{name}</h2><p>{description}</p><span className="strategy-status">{l('ДЕМО-ТЕСТ НУЖЕН', 'DEMO TEST REQUIRED')}</span></article>)}</div>
-            <div className="research-note"><CircleHelp size={16} /><span>{l('Невозможно надёжно загрузить «все стратегии из интернета». Каждую стратегию нужно проверять на конкретном инструменте, таймфрейме, спреде и комиссии с защитой от подгонки под историю.', 'There is no reliable way to load “every strategy on the internet”. Each strategy must be tested for the instrument, timeframe, spread and fees while controlling for overfitting.')}</span></div>
+          {activeNav === 'Strategies' && <section className="page-section strategy-library-page">
+            <div className="section-page-heading"><div><span className="section-kicker">RESEARCH LIBRARY · AUDCAD</span><h1>{l('Библиотека стратегий', 'Strategy library')}</h1><p>{l('Каталог популярных FX-подходов с правилами; исследовательские шаблоны не подключены к live-исполнению.', 'A catalog of common FX methods and rules; research templates are not connected to live execution.')}</p></div></div>
+            <div className="strategy-category-row">{[['all', l('Все', 'All')], ['trend', l('Тренд', 'Trend')], ['range', l('Диапазон', 'Range')], ['breakout', l('Пробой', 'Breakout')], ['session', l('Сессия', 'Session')], ['price', l('Свечи', 'Price action')], ['macro', l('Макро', 'Macro')]].map(([id, label]) => <button key={id} className={strategyFilter === id ? 'selected' : ''} onClick={() => setStrategyFilter(id)}>{label}</button>)}</div>
+            <div className="strategy-library-layout"><div className="strategy-picker-grid">{strategyCatalog.filter((strategy) => strategyFilter === 'all' || strategy.group === strategyFilter).map((strategy) => <button key={strategy.id} className={`strategy-choice ${selectedStrategy === strategy.id ? 'selected' : ''}`} onClick={() => setSelectedStrategy(strategy.id)}><Sparkles size={13} /><span>{strategy.name}</span>{strategy.id === 'ema-cross' && <small>{l('В АГЕНТЕ', 'RUNNER')}</small>}</button>)}</div>
+              {(() => { const detail = strategyCatalog.find((strategy) => strategy.id === selectedStrategy) || strategyCatalog[0]; return <article className="panel strategy-detail-card"><div className="strategy-detail-title"><span className="strategy-mark"><Sparkles size={16} /></span><div><span className="section-kicker">{detail.method} · AUDCAD</span><h2>{detail.name}</h2></div><span className={`status-badge ${detail.id === 'ema-cross' ? '' : 'muted'}`}>{detail.id === 'ema-cross' ? l('РАБОТАЕТ В АГЕНТЕ', 'ACTIVE RUNNER') : l('ШАБЛОН ИССЛЕДОВАНИЯ', 'RESEARCH TEMPLATE')}</span></div><p>{language === 'ru' ? detail.ru : detail.en}</p><div className="strategy-rule-box"><strong>{l('Как использовать', 'How to use')}</strong><span>{detail.id === 'ema-cross' ? l('Эта версия работает в агенте; остальные методы здесь пока справочный каталог и не выставляют ордера.', 'This method is active in the runner; other entries are reference templates and do not place orders.') : l('Сравните на истории AUD/CAD с учётом спреда, комиссий и проскальзывания; сначала используйте Paper/MT5 Demo.', 'Evaluate on AUD/CAD history including spread, fees and slippage; begin with Paper/MT5 Demo.')}</span></div><small className="strategy-disclaimer">{l('Список охватывает распространённые подходы, а не «все существующие» стратегии. Ни один паттерн не гарантирует прибыль.', 'This covers common methods, not every strategy ever devised. No pattern guarantees profit.')}</small></article>; })()}
+            </div>
           </section>}
 
           {['Risk controls', 'Reports'].includes(activeNav) && <section className="page-section"><div className="section-page-heading"><div><span className="section-kicker">MONEY WORK</span><h1>{t(activeNav)}</h1><p>{l('Раздел будет заполнен после добавления проверяемых данных счёта.', 'This section will be populated from verified account data.')}</p></div></div><div className="empty-state"><ShieldCheck size={28} /><h2>{l('Пока нет данных для отображения', 'No data to display yet')}</h2></div></section>}
@@ -700,7 +792,7 @@ function App() {
               <p>Enter the login and exact server shown in MT5. An investor password permits reading only; the optional auto-trader requires a trading-enabled password. Orders are disabled until you manually arm the agent and obey its hard risk limits.</p>
               <form className="account-form" onSubmit={connectAccount}>
                 <label>MT5 account number<input autoComplete="username" inputMode="numeric" value={accountForm.login} onChange={(event) => setAccountForm({ ...accountForm, login: event.target.value })} placeholder="Account login" required /></label>
-                <label>MT5 server <span className="field-optional">choose or type</span><input list="mt5-server-suggestions" value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="MetaQuotes-Demo or exact server name" required /><datalist id="mt5-server-suggestions"><option value="MetaQuotes-Demo" />{recentServers.map((server) => <option value={server} key={server} />)}{savedAccount?.server && <option value={savedAccount.server} />}</datalist><small className="server-help">MetaQuotes-Demo and recent entries appear here. To find any broker server, use MT5 desktop: File → Open an Account → search broker/company name → Find your broker. The available global list changes and cannot be bundled as a complete static list.</small></label>
+                <label>MT5 server <span className="field-optional">choose or type</span><input list="mt5-server-suggestions" value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="Bybit-Live or exact server name" required /><datalist id="mt5-server-suggestions"><option value="MetaQuotes-Demo" />{['Bybit-Live', ...Array.from({ length: 6 }, (_, index) => `Bybit-Live${index + 2}`), 'Bybit-Demo'].map((server) => <option value={server} key={server} />)}{recentServers.map((server) => <option value={server} key={server} />)}{savedAccount?.server && <option value={savedAccount.server} />}</datalist><div className="server-preset-row"><button className="secondary-action" type="button" onClick={() => setAccountForm((form) => ({ ...form, server: 'Bybit-Live' }))}>{l('Bybit MT5 Live', 'Bybit MT5 Live')}</button><button className="text-action" type="button" onClick={() => window.moneyWork?.openBybitMt5Guide?.()}>{l('Открыть инструкцию Bybit', 'Bybit MT5 setup')}</button></div><small className="server-help">{l('Сначала откройте отдельный MT5 CFD-счёт в Bybit. Введите именно его MT5 ID, MT5 trading password и сервер, указанные в Bybit; это не UID/пароль сайта Bybit. Список серверов может отличаться — выберите точное имя из данных счёта.', 'First create the separate MT5 CFD account in Bybit. Enter its MT5 ID, MT5 trading password and exact server from Bybit—not your Bybit UID or website password. Server names can vary; use the exact one shown in your account.')}</small></label>
                 <div className="demo-register-prompt"><span>{l('Нет демо-счёта?', 'No demo account?')}</span><button type="button" onClick={() => setModal('demo-register')}>{l('Как зарегистрировать', 'Register a demo account')} <ArrowUpRight size={13} /></button></div>
                 <label>MT5 account password<input type="password" autoComplete="current-password" value={accountForm.password} onChange={(event) => setAccountForm({ ...accountForm, password: event.target.value })} placeholder="Trader password is required for order execution" required /><small className="server-help">The investor password allows read-only access. The automated agent needs a trading-enabled password. Never send it in chat.</small></label>
                 <label>MT5 terminal path <span className="field-optional">optional</span><input value={accountForm.terminalPath} onChange={(event) => setAccountForm({ ...accountForm, terminalPath: event.target.value })} placeholder="Auto-detect, or C:\\Program Files\\...\\terminal64.exe" /></label>
@@ -714,7 +806,7 @@ function App() {
           </> : modal === 'live-trading-confirmation' ? <>
             <span className="section-kicker">LIVE ORDER CONFIRMATION</span>
             <h2>{l('Подтвердить автоторговлю на реальном счёте?', 'Enable automated orders on your real account?')}</h2>
-            <div className="paper-warning live-warning"><ShieldCheck size={15} /><span>{l('Будут отправляться реальные AUDCAD-ордера. Лимиты: не более 0,01 лота, одна позиция, SL 20 пипсов, TP 30 пипсов, стоп входов при дневном убытке 1%. Эти ограничения не исключают гэпы и потерю средств.', 'This can send real AUDCAD orders. Caps: up to 0.01 lot, one position, 20-pip SL, 30-pip TP, stop new entries at 1% daily loss. These limits do not eliminate gaps or financial loss.')}</span></div>
+            <div className="paper-warning live-warning"><ShieldCheck size={15} /><span>{l('Будут отправляться реальные AUDCAD-ордера. Лимиты: не более 0,01 лота, одна позиция, фиксация от 0,30 валюты счёта на 0,01 лота, SL 20 пипсов, TP 30 пипсов, стоп входов при дневном убытке 1%. Сигнал/стоп могут закрыть сделку с убытком; гэпы и проскальзывание остаются возможны.', 'This can send real AUDCAD orders. Caps: up to 0.01 lot, one position, cash close from 0.30 account-currency units per 0.01 lot, 20-pip SL, 30-pip TP, stop new entries at 1% daily loss. Signal/stops can still close at a loss; gaps and slippage remain possible.')}</span></div>
             <label className="live-confirm-field">{l('Для подтверждения введи LIVE', 'Type LIVE to confirm')}<input autoComplete="off" value={liveConfirmText} onChange={(event) => setLiveConfirmText(event.target.value)} placeholder="LIVE" /></label>
             <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>{l('Отмена', 'Cancel')}</button><button className="modal-danger" onClick={confirmLiveAgent} disabled={liveConfirmText.trim() !== 'LIVE'}>{l('ПОДТВЕРДИТЬ И ЗАПУСТИТЬ', 'CONFIRM AND START')}</button></div>
           </> : modal === 'demo-register' ? <>

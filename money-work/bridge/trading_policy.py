@@ -8,6 +8,7 @@ BOT_MAGIC = 26092707
 MAX_VOLUME = 0.01
 STOP_LOSS_PIPS = 20
 TAKE_PROFIT_PIPS = 30
+PROFIT_TARGET_PER_LOT = 30.0  # 0.30 account-currency units per 0.01 lot.
 MAX_DAILY_LOSS_RATIO = 0.01
 MAX_SPREAD_PIPS = 5
 LOSS_STREAK_LIMIT = 2
@@ -40,6 +41,13 @@ def normalize_volume(info, requested: float = MAX_VOLUME) -> float:
     if normalized < minimum or normalized > MAX_VOLUME + 1e-9:
         raise ValueError("Could not size a position within the 0.01-lot safety cap.")
     return round(normalized, 8)
+
+
+def profit_target_for_volume(volume: float) -> float:
+    size = float(volume)
+    if not math.isfinite(size) or size <= 0:
+        raise ValueError("Position volume must be finite and positive to calculate the cash-profit target.")
+    return round(size * PROFIT_TARGET_PER_LOT, 2)
 
 
 def daily_loss_exceeded(start_balance: float, realized_pnl: float, floating_pnl: float) -> bool:

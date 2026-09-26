@@ -159,6 +159,7 @@ function createWindow() {
 }
 
 ipcMain.handle('external:open-mt5-download', async () => shell.openExternal('https://www.metatrader5.com/en/download'));
+ipcMain.handle('external:open-bybit-mt5-guide', async () => shell.openExternal('https://www.bybit.com/en/derivative-activity/tradfi'));
 
 ipcMain.handle('window:toggle-fullscreen', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return false;

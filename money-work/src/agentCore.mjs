@@ -132,6 +132,33 @@ export function summarizePaperHistory(trades, now = new Date()) {
   };
 }
 
+export function movingAverageValues(bars, period, type = 'SMA') {
+  const size = Math.floor(Number(period));
+  if (!Array.isArray(bars) || !Number.isInteger(size) || size < 2 || !['SMA', 'EMA'].includes(type)) return [];
+  const output = Array(bars.length).fill(null);
+  if (bars.length < size) return output;
+  const close = bars.map((bar) => Number(bar.close));
+  if (close.some((value) => !Number.isFinite(value))) return output;
+  let average = close.slice(0, size).reduce((sum, value) => sum + value, 0) / size;
+  output[size - 1] = average;
+  const alpha = 2 / (size + 1);
+  for (let index = size; index < close.length; index += 1) {
+    average = type === 'EMA'
+      ? alpha * close[index] + (1 - alpha) * average
+      : close.slice(index + 1 - size, index + 1).reduce((sum, value) => sum + value, 0) / size;
+    output[index] = average;
+  }
+  return output;
+}
+
+export function sliceChartHistory(bars, olderOffset, visibleCount) {
+  if (!Array.isArray(bars)) return [];
+  const count = Math.max(1, Math.floor(Number(visibleCount) || 1));
+  const offset = Math.max(0, Math.floor(Number(olderOffset) || 0));
+  const end = Math.max(0, bars.length - offset);
+  return bars.slice(Math.max(0, end - count), end);
+}
+
 export function buildAnalystConsensus({ analysis, quote, referenceData, brokerStatus, now = new Date() }) {
   const signal = ['WATCH BUY', 'WATCH SELL', 'WAIT'].includes(analysis?.signal) ? analysis.signal : 'WAIT';
   const rsi = Number(analysis?.rsi);

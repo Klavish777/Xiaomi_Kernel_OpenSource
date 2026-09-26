@@ -39,3 +39,6 @@
 .demo-steps li::marker { color:#89a9ed; font-weight:700; }
 .demo-safety-note { display:flex; gap:8px; padding:10px; border:1px solid #344331; border-radius:7px; background:#172019; color:#b7c9b4; font-size:9px; line-height:1.5; }
 .demo-safety-note svg { flex:0 0 auto; color:#75c99f; }
+.server-preset-row { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
+.server-preset-row .secondary-action { min-height:27px; padding:5px 8px; font-size:8px; }
+.server-preset-row .text-action { min-height:27px; font-size:8px; }

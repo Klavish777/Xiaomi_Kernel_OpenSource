@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, computeRuleSignal, isInsideSchedule, summarizePaperHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
+import { adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, computeRuleSignal, isInsideSchedule, summarizePaperHistory, movingAverageValues, sliceChartHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
 
 test('schedule follows selected local weekdays and inclusive start/exclusive end', () => {
   const mondayMorning = new Date(2026, 8, 28, 9, 0);
@@ -106,6 +106,16 @@ test('virtual deposits and withdrawals create an auditable local balance ledger'
   assert.equal(withdrawn.state.cashFlows.length, 2);
   assert.equal(adjustVirtualBalance(initial, -1, 900, now).code, 'reserved_funds');
   assert.equal(adjustVirtualBalance(initial, 1, 0, now).code, 'invalid_amount');
+});
+
+test('chart editors calculate SMA/EMA and pan through the loaded candle history', () => {
+  const bars = [1, 2, 3, 4, 5, 6].map((close, time) => ({ close, time }));
+  assert.deepEqual(movingAverageValues(bars.slice(0, 4), 2, 'SMA'), [null, 1.5, 2.5, 3.5]);
+  const ema = movingAverageValues(bars.slice(0, 4), 2, 'EMA');
+  assert.equal(ema[1], 1.5);
+  assert.ok(Math.abs(ema[3] - 3.5) < 1e-8);
+  assert.deepEqual(sliceChartHistory(bars, 2, 3).map((bar) => bar.close), [2, 3, 4]);
+  assert.deepEqual(sliceChartHistory(bars, 0, 2).map((bar) => bar.close), [5, 6]);
 });
 
 test('rule analyzer refuses inadequate or invalid data', () => {

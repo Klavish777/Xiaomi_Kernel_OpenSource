@@ -113,6 +113,21 @@ class BridgeAgentTests(unittest.TestCase):
         self.assertAlmostEqual(request['price'] - request['sl'], 0.002)
         self.assertAlmostEqual(request['tp'] - request['price'], 0.003)
 
+    def test_position_closes_when_volume_scaled_cash_profit_target_is_met(self):
+        FAKE_MT5.positions = [SimpleNamespace(symbol='AUDCAD', magic=bridge.BOT_MAGIC, type=0, ticket=8,
+                                               volume=0.01, profit=0.30, swap=0, commission=0)]
+        result = bridge.evaluate_agent(demo_command(signal='WATCH BUY'))
+        self.assertEqual(result['state'], 'profit_target_closed')
+        self.assertEqual(result['profitTarget'], 0.30)
+        self.assertEqual(FAKE_MT5.requests[0]['position'], 8)
+
+    def test_position_is_not_closed_below_profit_target_without_other_exit_signal(self):
+        FAKE_MT5.positions = [SimpleNamespace(symbol='AUDCAD', magic=bridge.BOT_MAGIC, type=0, ticket=9,
+                                               volume=0.01, profit=0.29, swap=0, commission=0)]
+        result = bridge.evaluate_agent(demo_command(signal='WATCH BUY'))
+        self.assertEqual(result['state'], 'position_held')
+        self.assertEqual(FAKE_MT5.requests, [])
+
     def test_missing_or_stale_reference_blocks_new_entry(self):
         missing = bridge.evaluate_agent(demo_command(reference=None))
         self.assertEqual(missing['state'], 'awaiting_internet_check')

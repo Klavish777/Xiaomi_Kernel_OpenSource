@@ -25,6 +25,7 @@ from trading_policy import (
     loss_streak_cooldown,
     normalize_volume,
     pip_size,
+    profit_target_for_volume,
     reference_is_valid,
 )
 
@@ -190,7 +191,7 @@ def get_history(symbol: str, timeframe: str) -> list[dict]:
     with _mt5_lock:
         if not _connected:
             raise RuntimeError("Connect an MT5 account first.")
-        rates = mt5.copy_rates_from_pos(name, frame, 0, 64)
+        rates = mt5.copy_rates_from_pos(name, frame, 0, 2000)
         if rates is None:
             raise RuntimeError(f"Could not read MT5 history for {name}: {mt5.last_error()}")
         return [{
@@ -322,6 +323,16 @@ def evaluate_agent(command: dict) -> dict:
 
         if bot_positions:
             position = bot_positions[0]
+            position_volume = float(position.volume)
+            position_profit = (float(getattr(position, "profit", 0)) + float(getattr(position, "swap", 0))
+                               + float(getattr(position, "commission", 0)))
+            profit_target = profit_target_for_volume(position_volume)
+            if position_profit >= profit_target:
+                result = _close_bot_position(position, symbol, tick, info)
+                return {"state": "profit_target_closed", "position": int(position.ticket), "result": result,
+                        "floatingProfit": round(position_profit, 2), "profitTarget": profit_target,
+                        "profitCurrency": str(getattr(account, "currency", "account currency")),
+                        "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
             position_side = "WATCH BUY" if int(position.type) == int(mt5.POSITION_TYPE_BUY) else "WATCH SELL"
             should_close = not scheduled or (signal in {"WATCH BUY", "WATCH SELL"} and signal != position_side)
             if should_close:

@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('moneyWork', {
   openMt5Download: () => ipcRenderer.invoke('external:open-mt5-download'),
+  openBybitMt5Guide: () => ipcRenderer.invoke('external:open-bybit-mt5-guide'),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
   onFullscreenChange: (callback) => {
     const listener = (_event, isFullScreen) => callback(isFullScreen);

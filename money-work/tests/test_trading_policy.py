@@ -15,6 +15,7 @@ from trading_policy import (
     loss_streak_cooldown,
     normalize_volume,
     pip_size,
+    profit_target_for_volume,
     reference_is_valid,
 )
 
@@ -42,6 +43,12 @@ class TradingPolicyTests(unittest.TestCase):
         self.assertTrue(daily_loss_exceeded(10000, -90, -10))
         self.assertTrue(daily_loss_exceeded(0, 0, 0))
         self.assertEqual(MAX_DAILY_LOSS_RATIO, 0.01)
+
+    def test_cash_profit_target_scales_with_lot_volume(self):
+        self.assertEqual(profit_target_for_volume(0.01), 0.30)
+        self.assertEqual(profit_target_for_volume(0.02), 0.60)
+        with self.assertRaises(ValueError):
+            profit_target_for_volume(0)
 
     def test_reference_gate_requires_valid_recent_daily_reference(self):
         now = datetime(2026, 9, 26, 12, 0)

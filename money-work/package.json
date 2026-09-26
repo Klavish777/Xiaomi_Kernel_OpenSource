@@ -1,6 +1,6 @@
 {
   "name": "money-work",
-  "version": "0.4.10",
+  "version": "0.4.11",
   "private": true,
   "description": "Money Work AUDCAD analysis with risk-capped, adaptive MT5 demo/live automation",
   "main": "electron/main.cjs",
