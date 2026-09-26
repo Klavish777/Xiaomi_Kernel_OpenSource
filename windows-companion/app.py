@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,7 @@ APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 try:
     APP_VERSION = (APP_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 except OSError:
-    APP_VERSION = "0.1.1"
+    APP_VERSION = "0.1.2"
 USER_DATA_ROOT = Path(os.getenv("APPDATA", str(Path.home())))
 APP_DIR = USER_DATA_ROOT / APP_NAME
 LEGACY_APP_DIR = USER_DATA_ROOT / "XiaomiKernelCompanion"
@@ -349,8 +350,9 @@ class Companion(tk.Tk):
             messagebox.showerror("Не удалось восстановить настройки WSL2", str(exc))
 
     def check_wsl_gpu(self):
-        distro = self.vars["wsl_distro"].get().strip() or "Ubuntu"
         try:
+            distro = self._resolve_wsl_distro(self.vars["wsl_distro"].get().strip() or "Ubuntu")
+            self.vars["wsl_distro"].set(distro)
             result = subprocess.run(["wsl.exe", "-d", distro, "--", "nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
                                     capture_output=True, text=True, timeout=15)
             if result.returncode == 0 and result.stdout.strip():
@@ -358,21 +360,17 @@ class Companion(tk.Tk):
             else:
                 detail = result.stderr.strip() or "nvidia-smi не найден в WSL. Требуется совместимый NVIDIA-драйвер и WSL2."
                 self.resource_action_status.configure(text="GPU пока недоступен в WSL: " + detail[:240])
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
             self.resource_action_status.configure(text=f"Не удалось проверить GPU в WSL: {exc}")
 
     def check_wsl_project_access(self):
         try:
             project = self._project()
-            distro = self.vars["wsl_distro"].get().strip() or "Ubuntu"
-            wsl_path = subprocess.run(["wsl.exe", "-d", distro, "--", "wslpath", "-a", "-u", project],
-                                      check=True, capture_output=True, text=True, timeout=15).stdout.strip()
-            check = subprocess.run(["wsl.exe", "-d", distro, "--", "test", "-d", wsl_path], timeout=15)
-            if check.returncode == 0:
-                self.resource_action_status.configure(text=f"Папка проекта доступна в WSL как {wsl_path}")
-            else:
-                self.resource_action_status.configure(text=f"WSL не видит папку {wsl_path}; проверьте монтирование Windows-дисков.")
-        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            distro = self._resolve_wsl_distro(self.vars["wsl_distro"].get().strip() or "Ubuntu")
+            self.vars["wsl_distro"].set(distro)
+            wsl_path = self._resolve_project_wsl_path(project, distro)
+            self.resource_action_status.configure(text=f"Папка проекта доступна в WSL как {wsl_path}")
+        except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
             messagebox.showerror("Нет доступа к папке проекта", str(exc))
 
     def update_resource_monitor(self):
@@ -535,7 +533,68 @@ class Companion(tk.Tk):
         path = self.vars["project_path"].get().strip()
         if not path or not Path(path).is_dir():
             raise ValueError("Сначала укажите существующую папку проекта в настройках.")
-        return path
+        return str(Path(path).resolve())
+
+    def _resolve_wsl_distro(self, preferred):
+        try:
+            result = subprocess.run(["wsl.exe", "--list", "--quiet"], capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=15)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise RuntimeError(f"Не удалось запустить WSL. Установите/включите WSL2: {exc}") from exc
+        if result.returncode:
+            detail = (result.stderr or result.stdout).replace("\x00", "").strip()
+            raise RuntimeError(f"Команда `wsl --list --quiet` завершилась с ошибкой.\n{detail or 'Проверьте установку WSL2.'}")
+        output = result.stdout.replace("\x00", "")
+        distros = [line.strip() for line in output.splitlines() if line.strip()]
+        if not distros:
+            raise RuntimeError("WSL установлен, но Linux-дистрибутив не найден. В PowerShell выполните: wsl --install -d Ubuntu, затем перезагрузите ПК.")
+        match = next((name for name in distros if name.casefold() == preferred.casefold()), None)
+        if not match:
+            matches = [name for name in distros if name.casefold().startswith(preferred.casefold())]
+            if len(matches) == 1:
+                match = matches[0]
+            elif len(distros) == 1:
+                match = distros[0]
+            else:
+                names = ", ".join(distros)
+                raise RuntimeError(f"Дистрибутив `{preferred}` не найден. Установлены: {names}. Введите точное имя в настройках.")
+        return match
+
+    @staticmethod
+    def _windows_path_as_wsl(path):
+        normalized = path.replace("\\", "/")
+        match = re.match(r"^([A-Za-z]):/(.*)$", normalized)
+        if not match:
+            return None
+        drive, rest = match.groups()
+        return f"/mnt/{drive.lower()}/{rest}"
+
+    def _resolve_project_wsl_path(self, project, distro):
+        converted = subprocess.run(["wsl.exe", "-d", distro, "--", "wslpath", "-a", "-u", project],
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
+        candidates = []
+        if converted.returncode == 0 and converted.stdout.strip():
+            candidates.append(converted.stdout.strip())
+        fallback = self._windows_path_as_wsl(project)
+        if fallback and fallback not in candidates:
+            candidates.append(fallback)
+        error_detail = (converted.stderr or converted.stdout).strip()
+        for candidate in candidates:
+            check = subprocess.run(["wsl.exe", "-d", distro, "--", "test", "-d", candidate],
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+            if check.returncode == 0:
+                return candidate
+        if not candidates:
+            raise RuntimeError(
+                f"WSL не смог преобразовать путь `{project}`.\n"
+                f"Дистрибутив: {distro}. Ошибка: {error_detail or 'wslpath завершился с кодом ' + str(converted.returncode)}\n\n"
+                "Проверьте, что папка существует, а Windows-диск смонтирован в WSL (обычно /mnt/c). "
+                "Если путь в настройках написан как `ptoject`, исправьте опечатку на `project`, если папка называется именно так."
+            )
+        raise RuntimeError(
+            f"Путь `{project}` преобразован в `{candidates[0]}`, но эта папка недоступна в WSL-дистрибутиве `{distro}`.\n"
+            "Проверьте имя/наличие папки и доступ к Windows-дискам из WSL. Для диагностики запустите в PowerShell: wsl --list --verbose."
+        )
 
     def _spawn(self, cmd, widget, cwd=None):
         if self.busy:
@@ -565,19 +624,22 @@ class Companion(tk.Tk):
         try:
             project = self._project()
             command = self.vars["build_command"].get().strip()
-            distro = self.vars["wsl_distro"].get().strip() or "Ubuntu"
+            preferred_distro = self.vars["wsl_distro"].get().strip() or "Ubuntu"
+            distro = self._resolve_wsl_distro(preferred_distro)
+            self.vars["wsl_distro"].set(distro)
             if "{cpu_threads}" in command:
                 threads = (psutil.cpu_count(logical=True) or 1) if self.resource_vars["cpu"].get() else 1
                 command = command.replace("{cpu_threads}", str(threads))
             if not command:
-                raise ValueError("Задайте команду сборки в настройках, например make -j$(nproc).")
-            wsl_path = subprocess.run(["wsl.exe", "-d", distro, "--", "wslpath", "-a", "-u", project],
-                                      check=True, capture_output=True, text=True, timeout=20).stdout.strip()
+                raise ValueError("Задайте команду сборки в настройках, например make -j{cpu_threads}.")
+            if command.casefold() == "work":
+                raise ValueError("`work` не является командой сборки ядра. Укажите команду/скрипт проекта; для настоящей сборки сначала нужны исходники ядра и defconfig устройства.")
+            wsl_path = self._resolve_project_wsl_path(project, distro)
             self.build_log.configure(state="normal"); self.build_log.delete("1.0", "end"); self.build_log.configure(state="disabled")
             self._append(self.build_log, f"Запуск в {distro}: {wsl_path}\n$ {command}\n\n")
             self.start_button.configure(state="disabled"); self.stop_button.configure(state="normal")
             self._spawn(["wsl.exe", "-d", distro, "--", "bash", "-lc", f"cd -- {self._quote(wsl_path)} && {command}"], self.build_log)
-        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
             messagebox.showerror("Не удалось запустить сборку", str(exc))
 
     @staticmethod

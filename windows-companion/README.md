@@ -7,7 +7,7 @@ Windows-приложение для локальной сборки Linux-ядр
 ## Установка и запуск
 
 1. Установите WSL2 и Ubuntu. Для исходников ядра лучше использовать Linux-файловую систему WSL (например, `~/src/kernel`), чтобы сборка была быстрее.
-2. Скачайте и запустите [Project-Setup.exe](https://github.com/Klavish777/Xiaomi_Kernel_OpenSource/releases/download/project-v0.1.1/Project-Setup.exe).
+2. Скачайте и запустите [Project-Setup.exe](https://github.com/Klavish777/Xiaomi_Kernel_OpenSource/releases/download/project-v0.1.2/Project-Setup.exe).
 3. Укажите локальную папку проекта, WSL-дистрибутив и команду сборки в настройках.
 
 Установщик создаёт ярлык **Project** в меню «Пуск»; ярлык на рабочем столе можно включить при установке. При первом запуске настройки из предыдущей версии Xiaomi Kernel Companion мигрируют в `%APPDATA%\\Project`; API key остаётся защищён DPAPI.
@@ -16,7 +16,7 @@ Windows-приложение для локальной сборки Linux-ядр
 
 ## Версии
 
-Текущая версия указана в `VERSION`. При каждом изменении приложения увеличивайте patch-версию (например, `0.1.1` → `0.1.2`); GitHub Actions использует её для Windows-установщика и тега релиза.
+Текущая версия указана в `VERSION`. При каждом изменении приложения увеличивается patch-версия; GitHub Actions использует её для Windows-установщика и тега релиза.
 
 ## Физический доступ ресурсов к локальной сборке
 
