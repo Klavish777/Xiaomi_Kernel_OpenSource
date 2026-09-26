@@ -1,8 +1,8 @@
-# Money Work — v0.4.0
+# Money Work — v0.4.1
 
 Windows desktop dashboard prototype for a **read-only MT5** connection (including Bybit MT5 CFD). When connected, it reads account equity, broker instruments, bars, open positions, deal history and selected quotes (polled once per second). The app has **no order placement or autonomous trading endpoint** in this version.
 
-No fictional market prices, positions or trade history are shown in the functional views. Market analysis is a deterministic EMA/RSI readout derived from the selected MT5 bars—not a predictive AI model. This update makes the Markets, Positions, History, and Strategies views functional; Markets load from the connected broker catalog, while open positions and deal history are read from MT5. The dashboard is simplified, and the technical analyzer sits beside a clearly disabled autonomous-agent panel. It also keeps the Russian/English selector, fullscreen controls (F11 toggles; Esc exits fullscreen), and MT5 demo/live account identification. The browser preview does not have access to a local MT5 terminal—the connector works in the installed Windows desktop app.
+No fictional market prices, positions or trade history are shown in the functional views. Market analysis is a deterministic EMA/RSI readout derived from the selected MT5 bars—not a predictive AI model. This update fixes packaging of the standalone MT5 bridge executable and makes the Markets, Positions, History, and Strategies views functional; Markets load from the connected broker catalog, while open positions and deal history are read from MT5. The dashboard is simplified, and the technical analyzer sits beside a clearly disabled autonomous-agent panel. It also keeps the Russian/English selector, fullscreen controls (F11 toggles; Esc exits fullscreen), and MT5 demo/live account identification. The browser preview does not have access to a local MT5 terminal—the connector works in the installed Windows desktop app.
 
 ## Windows setup
 
@@ -25,7 +25,7 @@ To build the read-only MT5 bridge and launch the desktop UI on Windows:
 
 ```powershell
 py -m pip install MetaTrader5 pyinstaller
-pyinstaller --clean --noconfirm --collect-all MetaTrader5 --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
+pyinstaller --clean --noconfirm --onefile --collect-all MetaTrader5 --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
 npm run electron:dev
 ```
 

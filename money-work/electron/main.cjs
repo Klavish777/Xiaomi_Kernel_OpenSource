@@ -24,11 +24,18 @@ function rejectPending(message) {
 
 function startBridge() {
   if (bridge && bridge.exitCode === null) return bridge;
-  const bridgePath = app.isPackaged
-    ? path.join(process.resourcesPath, 'mt5-bridge.exe')
-    : path.join(__dirname, '..', 'bridge', 'dist', 'mt5-bridge.exe');
-  if (!fs.existsSync(bridgePath)) {
-    throw new Error('MT5 connector is not bundled. Install the Windows Money Work build and MetaTrader 5 terminal.');
+  const bridgeCandidates = app.isPackaged
+    ? [
+        path.join(process.resourcesPath, 'mt5-bridge.exe'),
+        path.join(process.resourcesPath, 'mt5-bridge', 'mt5-bridge.exe'),
+      ]
+    : [
+        path.join(__dirname, '..', 'bridge', 'dist', 'mt5-bridge.exe'),
+        path.join(__dirname, '..', 'bridge', 'dist', 'mt5-bridge', 'mt5-bridge.exe'),
+      ];
+  const bridgePath = bridgeCandidates.find((candidate) => fs.existsSync(candidate));
+  if (!bridgePath) {
+    throw new Error(`MT5 connector executable is missing. Checked: ${bridgeCandidates.join(' | ')}. Reinstall Money Work or rebuild the Windows installer.`);
   }
   bridge = spawn(bridgePath, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   stdoutBuffer = '';

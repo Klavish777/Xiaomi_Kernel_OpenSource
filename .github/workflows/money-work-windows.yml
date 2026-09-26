@@ -29,7 +29,8 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip pyinstaller MetaTrader5
-          pyinstaller --clean --noconfirm --collect-all MetaTrader5 --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
+          pyinstaller --clean --noconfirm --onefile --collect-all MetaTrader5 --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
+          if (!(Test-Path "bridge/dist/mt5-bridge.exe")) { throw "PyInstaller did not produce bridge/dist/mt5-bridge.exe" }
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -53,6 +54,14 @@ jobs:
         run: npm ci; npm run dist:win
         shell: pwsh
 
+      - name: Verify MT5 connector is inside the unpacked app
+        working-directory: money-work
+        shell: pwsh
+        run: |
+          if (!(Test-Path "release/win-unpacked/resources/mt5-bridge.exe")) {
+            throw "Installer payload is missing release/win-unpacked/resources/mt5-bridge.exe"
+          }
+
       - name: Publish versioned download
         shell: pwsh
         env:
@@ -65,7 +74,7 @@ jobs:
           if ($existing) {
             gh release upload $tag $installer --clobber
           } else {
-            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION adds working Markets, Positions, History and Strategies views, a simplified dashboard, and RU/EN labels. Positions and history are read from MT5. No order execution or online model training is included." --prerelease
+            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION fixes bundled MT5 connector startup and includes working Markets, Positions, History and Strategies views. MT5 remains read-only." --prerelease
           }
 
       - name: Upload installer artifact
