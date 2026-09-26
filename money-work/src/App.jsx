@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import packageJson from '../package.json';
 import {
   Activity, ArrowUpRight, Bell, ChevronDown, CircleHelp,
   Clock3, Command, LayoutDashboard, LockKeyhole,
   MoreHorizontal, Plus, Search, ShieldCheck,
   Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
+  Globe, Bot, Play, Pause, CircleCheck,
 } from 'lucide-react';
+import { advancePaperAgent, validateReferencePayload } from './agentCore.mjs';
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
@@ -14,13 +16,14 @@ const navItems = [
   { label: 'Overview', icon: LayoutDashboard },
   { label: 'Markets', icon: TrendingUp },
   { label: 'Strategies', icon: Sparkles },
+  { label: 'Agents', icon: Bot },
   { label: 'Positions', icon: Wallet },
   { label: 'History', icon: Clock3 },
 ];
 
 const copy = {
   en: {
-    Overview: 'Overview', Markets: 'Markets', Strategies: 'Strategies', Positions: 'Positions', History: 'History',
+    Overview: 'Overview', Markets: 'Markets', Strategies: 'Strategies', Agents: 'Agents', Positions: 'Positions', History: 'History',
     'Risk controls': 'Risk controls', Reports: 'Reports', Workspace: 'Workspace', 'My workspace': 'My workspace',
     'Personal account': 'Personal account', 'Good morning, Alex': 'Good morning, Alex',
     'Here’s your trading overview for today.': 'Here’s your trading overview for today.',
@@ -34,7 +37,7 @@ const copy = {
     'Fullscreen': 'Fullscreen', 'Windowed': 'Windowed', 'DEMO ACCOUNT': 'DEMO ACCOUNT', 'LIVE ACCOUNT': 'LIVE ACCOUNT',
   },
   ru: {
-    Overview: 'Обзор', Markets: 'Рынки', Strategies: 'Стратегии', Positions: 'Позиции', History: 'История',
+    Overview: 'Обзор', Markets: 'Рынки', Strategies: 'Стратегии', Agents: 'Агенты', Positions: 'Позиции', History: 'История',
     'Risk controls': 'Контроль риска', Reports: 'Отчёты', Workspace: 'Рабочая область', 'My workspace': 'Моя рабочая область',
     'Personal account': 'Личный аккаунт', 'Good morning, Alex': 'Доброе утро, Alex',
     'Here’s your trading overview for today.': 'Сводка вашей торговли за сегодня.',
@@ -48,6 +51,24 @@ const copy = {
     'Fullscreen': 'Полный экран', 'Windowed': 'Оконный режим', 'DEMO ACCOUNT': 'ДЕМО-СЧЁТ', 'LIVE ACCOUNT': 'РЕАЛЬНЫЙ СЧЁТ',
   },
 };
+
+const PAPER_STORAGE_KEY = 'money-work-paper-agent-v1';
+const REFERENCE_STORAGE_KEY = 'money-work-audcad-reference-v1';
+
+function readPaperAgent() {
+  const defaults = { enabled: false, capital: 10000, maxAllocation: 500, start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5], position: null, trades: [], realizedPnl: 0, lastEvaluatedAt: 0, lastAction: '' };
+  try {
+    const saved = JSON.parse(localStorage.getItem(PAPER_STORAGE_KEY) || '{}');
+    return { ...defaults, ...saved, enabled: false, days: Array.isArray(saved.days) ? saved.days.map(Number).filter((day) => day >= 0 && day <= 6) : defaults.days, position: null, trades: Array.isArray(saved.trades) ? saved.trades.slice(0, 50).map((trade) => trade.status === 'open' ? { ...trade, status: 'session stopped' } : trade) : [], lastEvaluatedAt: 0 };
+  } catch { return defaults; }
+}
+
+function readReference() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(REFERENCE_STORAGE_KEY) || 'null');
+    return saved && Number.isFinite(Number(saved.rate)) ? saved : null;
+  } catch { return null; }
+}
 
 function App() {
   const [language, setLanguage] = useState(() => localStorage.getItem('money-work-language') || 'ru');
@@ -79,6 +100,14 @@ function App() {
   const [positions, setPositions] = useState([]);
   const [deals, setDeals] = useState([]);
   const [accountDataLoading, setAccountDataLoading] = useState(false);
+  const [paperAgent, setPaperAgent] = useState(readPaperAgent);
+  const [referenceData, setReferenceData] = useState(readReference);
+  const [researchRunning, setResearchRunning] = useState(false);
+  const [researchLoading, setResearchLoading] = useState(false);
+  const [researchStatus, setResearchStatus] = useState('');
+  const [researchRate, setResearchRate] = useState(0);
+  const researchBusy = useRef(false);
+  const paperLastQuoteTime = useRef(0);
   const liveQuote = quotes[selectedSymbol];
   const series = useMemo(() => {
     const bars = historyBySymbol[selectedSymbol]?.[timeframe] || [];
@@ -86,6 +115,9 @@ function App() {
     if (liveQuote && values.length) values[values.length - 1].price = (liveQuote.bid + liveQuote.ask) / 2;
     return values;
   }, [timeframe, selectedSymbol, historyBySymbol, liveQuote]);
+  const referenceGapBps = referenceData && liveQuote && /^AUDCAD/i.test(selectedSymbol)
+    ? (((Number(liveQuote.bid) + Number(liveQuote.ask)) / 2 / Number(referenceData.rate)) - 1) * 10000
+    : null;
   const todayLabel = new Intl.DateTimeFormat(language === 'ru' ? 'ru-RU' : 'en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase();
 
   useEffect(() => {
@@ -210,6 +242,7 @@ function App() {
   const analysis = useMemo(() => {
     if (liveBars.length < 20) return null;
     const closes = liveBars.map((bar) => Number(bar.close));
+    if (liveQuote && closes.length) closes[closes.length - 1] = (Number(liveQuote.bid) + Number(liveQuote.ask)) / 2;
     const ema = (values, period) => {
       const alpha = 2 / (period + 1);
       return values.slice(1).reduce((value, price) => alpha * price + (1 - alpha) * value, values[0]);
@@ -227,7 +260,62 @@ function App() {
     const trend = fast > slow ? 'Bullish' : fast < slow ? 'Bearish' : 'Flat';
     const signal = trend === 'Bullish' && rsi < 70 ? 'WATCH BUY' : trend === 'Bearish' && rsi > 30 ? 'WATCH SELL' : 'WAIT';
     return { rsi, trend, signal, price: closes.at(-1), source: 'MT5 historical bars' };
-  }, [liveBars]);
+  }, [liveBars, liveQuote]);
+
+  async function runInternetResearch() {
+    if (researchBusy.current) return;
+    researchBusy.current = true;
+    setResearchLoading(true);
+    setResearchStatus('');
+    const startedAt = performance.now();
+    try {
+      const response = await fetch('https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+      if (!response.ok) throw new Error(`Reference source returned HTTP ${response.status}.`);
+      const payload = await response.json();
+      const validated = validateReferencePayload(payload);
+      if (!validated.valid) throw new Error('Reference data failed schema, date, or positive-rate checks.');
+      const result = { rate: validated.rate, sourceDate: validated.date, fetchedAt: new Date().toISOString(), source: 'Frankfurter / central-bank daily reference', checks: validated.checks };
+      setReferenceData(result);
+      localStorage.setItem(REFERENCE_STORAGE_KEY, JSON.stringify(result));
+      const elapsed = Math.max(250, performance.now() - startedAt);
+      setResearchRate(Math.max(1, Math.round(3 * 60000 / elapsed)));
+      setResearchStatus('validated');
+    } catch (error) {
+      setResearchStatus(error.message || 'Internet reference check failed.');
+    } finally {
+      researchBusy.current = false;
+      setResearchLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!researchRunning) return undefined;
+    runInternetResearch();
+    const timer = setInterval(runInternetResearch, 15 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [researchRunning]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PAPER_STORAGE_KEY, JSON.stringify({ ...paperAgent, enabled: false, position: null, lastEvaluatedAt: 0 }));
+    } catch { /* local browser storage can be unavailable */ }
+  }, [paperAgent]);
+
+  useEffect(() => {
+    if (!paperAgent.enabled || !liveQuote || !analysis) return;
+    const price = (Number(liveQuote.bid) + Number(liveQuote.ask)) / 2;
+    const quoteTime = Number(liveQuote.timeMsc || Number(liveQuote.time || 0) * 1000);
+    if (!quoteTime || quoteTime <= paperLastQuoteTime.current) return;
+    paperLastQuoteTime.current = quoteTime;
+    const next = advancePaperAgent(paperAgent, {
+      signal: analysis.signal,
+      price,
+      quoteTime,
+      symbol: selectedSymbol,
+      settings: { ...paperAgent, capital: Number(paperAgent.capital) + Number(paperAgent.realizedPnl || 0) },
+    });
+    if (next !== paperAgent) setPaperAgent(next);
+  }, [paperAgent, liveQuote, analysis, selectedSymbol]);
 
   async function refreshPositionsNow() {
     if (!window.moneyWork || !mt5Account) return;
@@ -400,11 +488,18 @@ function App() {
                 {analysis ? <><div className="analysis-signal"><strong>{analysis.signal}</strong><span>{selectedSymbol} · {analysis.trend}</span></div><div className="analysis-stats"><div><small>RSI (14)</small><strong>{analysis.rsi.toFixed(1)}</strong></div><div><small>EMA trend</small><strong>{analysis.trend}</strong></div><div><small>{l('Последняя цена', 'Last close')}</small><strong>{analysis.price.toFixed(5)}</strong></div></div><p className="muted-copy">{l('Сигнал рассчитан по доступным барам MT5; это индикатор, а не прогноз или гарантия результата.', 'Computed from available MT5 bars; this is an indicator, not a forecast or guarantee.')}</p></> : <div className="empty-inline">{l('Для расчёта нужны минимум 20 реальных баров MT5. Подключите счёт и выберите рынок.', 'At least 20 real MT5 bars are required. Connect an account and select a market.')}</div>}
               </article>
               <article className="panel work-card agent-card">
-                <div className="work-card-heading"><div><span className="section-kicker"><Zap size={14} /> {l('AI АГЕНТ', 'AI AGENT')}</span><h2>{l('Автономный режим', 'Autonomous mode')}</h2></div><span className="status-badge muted">{l('НЕ АКТИВЕН', 'NOT ACTIVE')}</span></div>
-                <p className="muted-copy">{l('Ордеры и онлайн-обучение не включены. Сначала нужны проверка стратегий, демо-тест и заданные лимиты риска.', 'Order execution and online learning are not enabled. Strategy validation, demo testing and explicit risk limits are required first.')}</p>
-                <div className="agent-checklist"><span><ShieldCheck size={14} /> {l('Поток MT5', 'MT5 feed')}: {mt5Account ? l('подключён', 'connected') : l('нет', 'not connected')}</span><span><LockKeyhole size={14} /> {l('Исполнение ордеров', 'Order execution')}: {l('заблокировано', 'disabled')}</span><span><Activity size={14} /> {l('Режим', 'Mode')}: {l('только анализ', 'analysis only')}</span></div>
-                <button className="secondary-action" onClick={() => setActiveNav('Strategies')}>{l('Открыть каталог стратегий', 'Open strategy library')} <ArrowUpRight size={14} /></button>
+                <div className="work-card-heading"><div><span className="section-kicker"><Globe size={14} /> {l('ИНТЕРНЕТ-АГЕНТ', 'INTERNET AGENT')}</span><h2>{l('Проверка AUD/CAD', 'AUD/CAD reference checker')}</h2></div><span className={`status-badge ${researchRunning ? '' : 'muted'}`}>{researchLoading ? l('СКАНИРОВАНИЕ', 'SCANNING') : researchRunning ? l('АКТИВЕН', 'ACTIVE') : l('ПАУЗА', 'PAUSED')}</span></div>
+                <div className="research-mini"><div className={`globe-orb ${researchRunning ? 'spinning' : ''}`} style={{ '--globe-speed': `${Math.max(2, Math.min(24, 900 / Math.max(1, researchRate)))}s` }}><span /><i /><b /></div><div><strong>{referenceData ? Number(referenceData.rate).toFixed(5) : '—'}</strong><small>{referenceData ? `${l('Источник на дату', 'Source date')} ${referenceData.sourceDate}` : l('Публичный дневной ориентир', 'Public daily reference')}</small><small>{researchRate ? `${researchRate} ${l('проверок/мин по последнему запросу', 'checks/min on last request')}` : l('Скорость появится после проверки', 'Speed appears after a scan')}</small></div></div>
+                <p className="muted-copy">{l('Публичный дневной ориентир, не биржевая котировка и не поток в реальном времени. Проверяется формат, дата и положительное значение.', 'Public daily reference, not an exchange quote or live feed. Schema, date and positive rate are checked.')}</p>
+                <div className="agent-actions"><button className="secondary-action" onClick={() => runInternetResearch()} disabled={researchLoading}><RefreshCw size={14} /> {researchLoading ? l('Проверка…', 'Checking…') : l('Проверить сейчас', 'Check now')}</button><button className="secondary-action" onClick={() => setResearchRunning((running) => !running)}>{researchRunning ? <Pause size={14} /> : <Play size={14} />}{researchRunning ? l('Пауза', 'Pause') : l('Запустить', 'Start')}</button><button className="text-action" onClick={() => setActiveNav('Agents')}>{l('Настроить агенты', 'Configure agents')} <ArrowUpRight size={13} /></button></div>
               </article>
+            </section>
+            <section className="panel paper-overview-row">
+              <div className="paper-overview-icon"><Bot size={19} /></div>
+              <div className="paper-overview-copy"><span className="section-kicker">{l('АВТОПИЛОТ · PAPER ONLY', 'AUTOPILOT · PAPER ONLY')}</span><strong>{l('Симулятор стратегий', 'Strategy simulator')}</strong><small>{paperAgent.enabled ? l('Работает по сигналам и заданному расписанию; реальные ордера невозможны.', 'Runs on signals and your schedule; real orders are impossible.') : l('Остановлен. Настройте виртуальный капитал и часы торговли.', 'Paused. Set virtual capital and trading hours.')}</small></div>
+              <span className={`status-badge ${paperAgent.enabled ? '' : 'muted'}`}>{paperAgent.enabled ? l('АКТИВЕН', 'ACTIVE') : l('ПАУЗА', 'PAUSED')}</span>
+              <button className="secondary-action" onClick={() => setPaperAgent((current) => ({ ...current, enabled: !current.enabled }))}>{paperAgent.enabled ? <Pause size={14} /> : <Play size={14} />}{paperAgent.enabled ? l('Пауза', 'Pause') : l('Запустить симуляцию', 'Start simulation')}</button>
+              <button className="text-action" onClick={() => setActiveNav('Agents')}>{l('Настроить', 'Configure')} <ArrowUpRight size={13} /></button>
             </section>
           </>}
 
@@ -412,6 +507,38 @@ function App() {
             <div className="section-page-heading"><div><span className="section-kicker">MT5 MARKET WATCH</span><h1>{l('Рынки', 'Markets')}</h1><p>{l('Каталог именно того брокера, к которому подключён MT5.', 'The instrument catalog from your connected MT5 broker.')}</p></div><button className="secondary-action" onClick={loadBrokerMarkets} disabled={!mt5Account || marketLoading}><RefreshCw size={14} /> {marketLoading ? l('Загрузка…', 'Loading…') : l('Загрузить все рынки', 'Load all markets')}</button></div>
             <form className="market-search" onSubmit={loadBrokerMarkets}><Search size={16} /><input value={marketQuery} onChange={(event) => setMarketQuery(event.target.value)} placeholder={l('Поиск символа, например AUDCAD', 'Search symbol, e.g. AUDCAD')} /><button className="modal-primary" disabled={!mt5Account || marketLoading}>{l('Найти', 'Search')}</button></form>
             {!mt5Account ? <div className="empty-state"><TrendingUp size={28} /><h2>{l('Подключите MT5, чтобы увидеть доступные рынки', 'Connect MT5 to see available markets')}</h2><p>{l('Сейчас реальные котировки и брокерский список не загружаются. Подключается demo или live счёт.', 'Broker instruments and live quotes are not loaded. Either a demo or live account can be connected.')}</p><button className="connect-button" onClick={() => setModal('connect')}><Plus size={15} /> {l('Подключить счёт', 'Connect account')}</button></div> : <div className="market-list">{symbolResults.length ? symbolResults.map((symbol) => { const q = quotes[symbol]; return <button className={`market-row ${symbol === selectedSymbol ? 'selected' : ''}`} key={symbol} onClick={async () => { await subscribeInstrument(symbol); setActiveNav('Overview'); }}><span className="market-symbol">{symbol}</span><span>{q ? `${Number(q.bid).toFixed(5)} / ${Number(q.ask).toFixed(5)}` : l('Нажмите для загрузки котировки', 'Select to load quote')}</span><span className={q ? 'live-tag' : 'market-dash'}>{q ? 'LIVE' : '—'}</span></button>; }) : <div className="empty-inline">{l('Нажмите «Загрузить все рынки» или выполните поиск.', 'Click “Load all markets” or search for a symbol.')}</div>}</div>}
+          </section>}
+
+          {activeNav === 'Agents' && <section className="page-section agents-page">
+            <div className="section-page-heading"><div><span className="section-kicker">{l('РАБОЧАЯ ПАНЕЛЬ АГЕНТОВ', 'AGENT CONTROL DESK')}</span><h1>{l('Агенты и симуляция', 'Agents & simulation')}</h1><p>{l('Автоматический режим здесь создаёт только виртуальные сделки. Реальные ордера отправить невозможно.', 'Automation here creates virtual paper trades only. Real orders cannot be sent.')}</p></div></div>
+            <div className="agent-control-grid">
+              <article className="panel agent-control-card internet-control-card">
+                <div className="agent-control-heading"><div><span className="section-kicker"><Globe size={14} /> {l('АГЕНТ СБОРА ДАННЫХ', 'INTERNET DATA AGENT')}</span><h2>{l('Публичный ориентир AUD/CAD', 'Public AUD/CAD reference')}</h2></div><span className={`status-badge ${researchRunning ? '' : 'muted'}`}>{researchLoading ? l('СКАНИРОВАНИЕ', 'SCANNING') : researchRunning ? l('РАБОТАЕТ', 'RUNNING') : l('ПАУЗА', 'PAUSED')}</span></div>
+                <div className="research-feature"><div className={`globe-orb large-globe ${researchRunning ? 'spinning' : ''}`} style={{ '--globe-speed': `${Math.max(2, Math.min(24, 900 / Math.max(1, researchRate)))}s` }} aria-label={l('Глобус вращается во время работы агента', 'Globe rotates while the agent is running')}><span /><i /><b /></div><div className="research-value"><strong>{referenceData ? Number(referenceData.rate).toFixed(5) : '—'}</strong><small>AUD / CAD · {referenceData ? referenceData.sourceDate : l('ожидает первую проверку', 'awaiting first scan')}</small><small>{researchRate ? `${researchRate} ${l('проверок в минуту по скорости последнего цикла', 'checks per minute based on the latest scan')}` : l('Скорость появится после успешного запроса', 'Speed appears after the first successful request')}</small></div></div>
+                <div className="research-results-list">{['response schema', 'publication date', 'AUD/CAD reference rate'].map((check, index) => { const result = referenceData?.checks?.find((item) => item.name === check); return <span key={check}><CircleCheck size={14} className={result?.ok ? 'check-ok' : 'check-pending'} />{l(['Формат ответа API', 'Дата публикации', 'Курс больше нуля'][index], check)}<b>{result ? (result.ok ? l('ПРОЙДЕНО', 'PASS') : l('ОШИБКА', 'FAIL')) : l('ОЖИДАЕТ', 'PENDING')}</b></span>; })}</div>
+                {referenceData && <p className="research-footnote">{l('Источник', 'Source')}: Frankfurter API · {l('время запроса', 'fetched')}: {new Date(referenceData.fetchedAt).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')} · {l('публичный дневной справочный курс, не live-котировка.', 'public daily reference rate, not a live quote.')}</p>}
+                {referenceGapBps !== null && <div className="reference-comparison"><span>{l('Разница с mid MT5', 'Difference vs MT5 mid')}</span><strong className="neutral-text">{referenceGapBps >= 0 ? '+' : ''}{referenceGapBps.toFixed(1)} bps</strong><small>{l('Только сопоставление разных временных источников, не торговый сигнал.', 'Comparison across differently timed sources only, not a trading signal.')}</small></div>}
+                {researchStatus && researchStatus !== 'validated' && <div className="connection-error">{researchStatus}</div>}
+                <div className="agent-actions"><button className="modal-primary" onClick={runInternetResearch} disabled={researchLoading}><RefreshCw size={14} /> {researchLoading ? l('Сканирование…', 'Scanning…') : l('Проверить сейчас', 'Check now')}</button><button className="secondary-action" onClick={() => setResearchRunning((running) => !running)}>{researchRunning ? <Pause size={14} /> : <Play size={14} />}{researchRunning ? l('Остановить цикл', 'Pause schedule') : l('Запуск · раз в 15 мин', 'Start · every 15 min')}</button></div>
+                <p className="muted-copy">{l('Три проверки применяются к каждому ответу. Сервис публикует дневные справочные курсы; это не интернет-сканер всех сайтов, не live-поток и не генеративная ИИ-модель.', 'Three validation checks run on each response. The service publishes daily reference rates; this is not a crawler of all websites, a live feed, or a generative AI model.')}</p>
+              </article>
+
+              <article className="panel agent-control-card paper-control-card">
+                <div className="agent-control-heading"><div><span className="section-kicker"><Bot size={14} /> {l('АВТОМАТИЧЕСКИЙ СИМУЛЯТОР', 'AUTOMATED SIMULATOR')}</span><h2>{l('Настройки paper trading', 'Paper trading controls')}</h2></div><span className={`status-badge ${paperAgent.enabled ? '' : 'muted'}`}>{paperAgent.enabled ? l('АКТИВЕН', 'ACTIVE') : l('ПАУЗА', 'PAUSED')}</span></div>
+                <div className="paper-warning"><ShieldCheck size={15} /><span>{l('ТОЛЬКО СИМУЛЯЦИЯ. В MT5 не отправляются ордера и средства не используются.', 'SIMULATION ONLY. No MT5 orders are sent and no funds are used.')}</span></div>
+                <div className="paper-config-grid">
+                  <label>{l('Виртуальный баланс (CAD)', 'Virtual balance (CAD)')}<input type="number" min="1" max="10000000" step="100" value={paperAgent.capital} onChange={(event) => setPaperAgent((current) => ({ ...current, capital: Math.min(10000000, Math.max(1, Number(event.target.value) || 1)) }))} /></label>
+                  <label>{l('Макс. объём одной симуляции (CAD)', 'Max allocation per simulation (CAD)')}<input type="number" min="1" max="10000000" step="50" value={paperAgent.maxAllocation} onChange={(event) => setPaperAgent((current) => ({ ...current, maxAllocation: Math.min(10000000, Math.max(1, Number(event.target.value) || 1)) }))} /></label>
+                  <label>{l('Начало по местному времени', 'Start in local time')}<input type="time" value={paperAgent.start} onChange={(event) => setPaperAgent((current) => ({ ...current, start: event.target.value }))} /></label>
+                  <label>{l('Окончание по местному времени', 'End in local time')}<input type="time" value={paperAgent.end} onChange={(event) => setPaperAgent((current) => ({ ...current, end: event.target.value }))} /></label>
+                </div>
+                <div className="weekday-picker"><span>{l('Дни работы · часовой пояс', 'Trading days · timezone')}: <b>{Intl.DateTimeFormat().resolvedOptions().timeZone}</b></span><div>{(language === 'ru' ? ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] : ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']).map((label, day) => <button key={day} type="button" className={paperAgent.days.includes(day) ? 'selected' : ''} aria-pressed={paperAgent.days.includes(day)} onClick={() => setPaperAgent((current) => ({ ...current, days: current.days.includes(day) ? current.days.filter((item) => item !== day) : [...current.days, day].sort() }))}>{label}</button>)}</div></div>
+                <div className="paper-performance-grid"><div><small>{l('Закрытый P&L симуляции', 'Realized paper P&L')}</small><strong className={paperAgent.realizedPnl >= 0 ? 'positive-text' : 'negative-text'}>{Number(paperAgent.realizedPnl || 0).toFixed(2)} CAD</strong></div><div><small>{l('Текущий сигнал', 'Current signal')}</small><strong>{analysis?.signal || l('Нет данных', 'No data')}</strong></div><div><small>{l('Открытая виртуальная сделка', 'Open virtual position')}</small><strong>{paperAgent.position ? `${paperAgent.position.side} ${paperAgent.position.symbol}` : l('Нет', 'None')}</strong></div></div>
+                <div className="agent-actions"><button className={paperAgent.enabled ? 'modal-danger' : 'modal-primary'} onClick={() => setPaperAgent((current) => ({ ...current, enabled: !current.enabled }))}>{paperAgent.enabled ? <Pause size={14} /> : <Play size={14} />}{paperAgent.enabled ? l('Остановить симулятор', 'Pause simulator') : l('Запустить paper-агента', 'Start paper agent')}</button><span className="agent-feed-status"><Activity size={14} /> {mt5Account && liveQuote && analysis ? l('Подключён к реальным барам/котировке MT5 для виртуальных расчётов', 'Using MT5 bars/quote for virtual calculations') : l('Для сигналов подключите MT5 и загрузите AUDCAD', 'Connect MT5 and load AUDCAD to receive signals')}</span></div>
+                <p className="muted-copy">{l('Правила: EMA(20/50) + RSI(14); виртуальный вход только по WATCH BUY/SELL, закрытие при обратном сигнале или следующей котировке после окончания окна. Учитываются только выбранные дни и локальное время. Комиссия, спред, проскальзывание и маржа не моделируются; результат не прогнозирует реальную доходность.', 'Rules: EMA(20/50) + RSI(14); virtual entry on WATCH BUY/SELL, exit on the opposite signal or the next quote after the schedule ends. Selected weekdays and local time are enforced. Commission, spread, slippage and margin are not modeled; results do not predict real returns.')}</p>
+              </article>
+            </div>
+            <article className="panel paper-history-panel"><div className="panel-heading"><div><span className="section-kicker">{l('ЖУРНАЛ', 'ACTIVITY LOG')}</span><h2>{l('Виртуальные сделки', 'Paper trades')}</h2></div><span className="muted-copy">{paperAgent.trades.length} / 50</span></div>{paperAgent.trades.length ? <div className="data-table-wrap"><table className="data-table"><thead><tr><th>{l('Рынок', 'Market')}</th><th>{l('Тип', 'Side')}</th><th>{l('Вход', 'Entry')}</th><th>{l('Выход', 'Exit')}</th><th>{l('Результат CAD', 'Result CAD')}</th><th>{l('Статус', 'Status')}</th></tr></thead><tbody>{paperAgent.trades.map((trade) => <tr key={trade.id}><td><strong>{trade.symbol}</strong><small>{new Date(trade.openTime).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')}</small></td><td>{trade.side}</td><td>{Number(trade.openPrice).toFixed(5)}</td><td>{trade.closePrice ? Number(trade.closePrice).toFixed(5) : '—'}</td><td className={Number(trade.pnl || 0) >= 0 ? 'positive-text' : 'negative-text'}>{trade.pnl === undefined ? '—' : Number(trade.pnl).toFixed(2)}</td><td>{trade.status === 'closed' ? l('ЗАКРЫТА · PAPER', 'CLOSED · PAPER') : trade.status === 'session stopped' ? l('СЕССИЯ ОСТАНОВЛЕНА', 'SESSION STOPPED') : l('ОТКРЫТА · PAPER', 'OPEN · PAPER')}</td></tr>)}</tbody></table></div> : <div className="empty-inline">{l('Сделок пока нет. Запустите симуляцию после загрузки рыночных данных.', 'No paper trades yet. Start the simulator after loading market data.')}</div>}</article>
           </section>}
 
           {activeNav === 'Positions' && <section className="page-section">

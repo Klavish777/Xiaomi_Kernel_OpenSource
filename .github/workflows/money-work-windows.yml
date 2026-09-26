@@ -60,9 +60,29 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
         id: version
 
+      - name: Test agent scheduling, data validation, and paper engine
+        working-directory: money-work
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw "Money Work agent tests failed" }
+        shell: pwsh
+
+      - name: Verify public AUD/CAD reference endpoint
+        shell: pwsh
+        run: |
+          $reference = Invoke-RestMethod -Uri "https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD" -TimeoutSec 30 -Headers @{ Accept = "application/json" }
+          if ($reference.base -ne "AUD" -or !$reference.rates -or !($reference.rates.CAD -gt 0)) { throw "The public AUD/CAD reference response failed schema/rate checks." }
+          $sourceDate = [DateTime]::ParseExact($reference.date, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+          if ($sourceDate.Date -gt [DateTime]::UtcNow.Date) { throw "The public AUD/CAD reference date is in the future: $($reference.date)" }
+          Write-Host "Verified AUD/CAD daily reference $($reference.rates.CAD) published $($reference.date)"
+
       - name: Install and build Windows installer
         working-directory: money-work
-        run: npm ci; npm run dist:win
+        run: |
+          npm run dist:win
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed" }
         shell: pwsh
 
       - name: Verify MT5 connector is inside the unpacked app
@@ -85,7 +105,7 @@ jobs:
           if ($existing) {
             gh release upload $tag $installer --clobber
           } else {
-            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION fixes the bundled NumPy/MetaTrader5 runtime imports, adds connector smoke testing, and keeps MT5 server selection and demo registration guidance." --prerelease
+            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION adds a configurable, paper-only strategy simulator, a public daily AUD/CAD reference checker with visible validation and an animated globe, and rule-based MT5 chart analysis. No live order execution is available. Windows CI tests agent logic, connector runtime imports, and installer contents before publishing." --prerelease
           }
 
       - name: Upload installer artifact

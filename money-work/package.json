@@ -1,14 +1,15 @@
 {
   "name": "money-work",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "private": true,
-  "description": "Money Work desktop dashboard for demo trading analysis",
+  "description": "Money Work read-only MT5 analysis, internet reference checks, and paper-trading simulation",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "electron:dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
-    "dist:win": "npm run build && electron-builder --win nsis --x64"
+    "dist:win": "npm run build && electron-builder --win nsis --x64",
+    "test": "node --test"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
