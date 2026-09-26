@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import packageJson from '../package.json';
 import {
-  Activity, ArrowDownRight, ArrowUpRight, Bell, ChevronDown, CircleHelp,
-  Clock3, Command, CreditCard, Gauge, LayoutDashboard, LockKeyhole,
-  MoreHorizontal, Pause, Play, Plus, Search, Settings2, ShieldCheck,
-  Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages,
+  Activity, ArrowUpRight, Bell, ChevronDown, CircleHelp,
+  Clock3, Command, LayoutDashboard, LockKeyhole,
+  MoreHorizontal, Plus, Search, ShieldCheck,
+  Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
 } from 'lucide-react';
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -14,7 +14,7 @@ const navItems = [
   { label: 'Overview', icon: LayoutDashboard },
   { label: 'Markets', icon: TrendingUp },
   { label: 'Strategies', icon: Sparkles },
-  { label: 'Positions', icon: Wallet, count: '2' },
+  { label: 'Positions', icon: Wallet },
   { label: 'History', icon: Clock3 },
 ];
 
@@ -49,67 +49,14 @@ const copy = {
   },
 };
 
-const rawSeries = [
-  0.65332, 0.65337, 0.65328, 0.65341, 0.65346, 0.65339, 0.65352, 0.65348,
-  0.65361, 0.65355, 0.65364, 0.65358, 0.65372, 0.65368, 0.65380, 0.65374,
-  0.65369, 0.65383, 0.65378, 0.65392, 0.65387, 0.65396, 0.65391, 0.65403,
-  0.65400, 0.65412, 0.65404, 0.65417, 0.65410, 0.65424, 0.65420, 0.65429,
-  0.65421, 0.65436, 0.65430, 0.65443, 0.65437, 0.65448, 0.65442, 0.65456,
-  0.65450, 0.65462, 0.65457, 0.65469, 0.65463, 0.65476, 0.65471, 0.65482,
-];
-
-const symbolRows = [
-  { symbol: 'AUDCAD', name: 'Australian Dollar / Canadian Dollar', price: '0.65482', change: '+0.42%', positive: true, icon: 'A' },
-  { symbol: 'EURUSD', name: 'Euro / US Dollar', price: '1.08426', change: '+0.18%', positive: true, icon: '€' },
-  { symbol: 'GBPUSD', name: 'British Pound / US Dollar', price: '1.27194', change: '−0.12%', positive: false, icon: '£' },
-];
-
-const activities = [
-  { pair: 'AUDCAD', side: 'Buy', amount: '0.08 lot', time: '10:42:18', status: 'Paper open', positive: true },
-  { pair: 'EURUSD', side: 'Sell', amount: '0.05 lot', time: '09:18:06', status: 'Paper closed', positive: false },
-  { pair: 'AUDCAD', side: 'Buy', amount: '0.06 lot', time: 'Yesterday', status: 'Paper closed', positive: true },
-];
-
-function buildSeries(timeframe, symbol) {
-  const factor = timeframe === '1H' ? 1.9 : timeframe === '5M' ? 0.72 : timeframe === '1M' ? 0.45 : 1;
-  const base = symbol === 'EURUSD' ? 1.0828 : symbol === 'GBPUSD' ? 1.2705 : 0.6533;
-  return rawSeries.map((price, i) => ({
-    time: `${String(7 + Math.floor(i / 4)).padStart(2, '0')}:${String((i * 15) % 60).padStart(2, '0')}`,
-    price: base + (price - 0.6533) * factor + Math.sin(i / 2.7) * 0.00005,
-  }));
-}
-
-function IconTile({ children, tone = 'blue' }) {
-  return <span className={`icon-tile ${tone}`}>{children}</span>;
-}
-
-function MetricCard({ label, value, change, icon: Icon, tone, positive = true, neutral = false, note }) {
-  return (
-    <article className="metric-card panel">
-      <div className="metric-top">
-        <span className="metric-label">{label}</span>
-        <IconTile tone={tone}><Icon size={17} strokeWidth={1.8} /></IconTile>
-      </div>
-      <div className="metric-value">{value}</div>
-      <div className="metric-bottom">
-        <span className={`metric-change ${neutral ? 'neutral' : positive ? 'up' : 'down'}`}>
-          {!neutral && (positive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />)}{change}
-        </span>
-        <span className="metric-note">{note}</span>
-      </div>
-    </article>
-  );
-}
-
 function App() {
   const [language, setLanguage] = useState(() => localStorage.getItem('money-work-language') || 'ru');
   const [fullScreen, setFullScreen] = useState(true);
   const t = (key) => copy[language]?.[key] || copy.en[key] || key;
+  const l = (ru, en) => language === 'ru' ? ru : en;
   const [timeframe, setTimeframe] = useState('15M');
   const [activeNav, setActiveNav] = useState('Overview');
   const [selectedSymbol, setSelectedSymbol] = useState('AUDCAD');
-  const [demoRunning, setDemoRunning] = useState(false);
-  const [riskEnabled, setRiskEnabled] = useState(true);
   const [modal, setModal] = useState('');
   const [mt5Account, setMt5Account] = useState(null);
   const [savedAccount, setSavedAccount] = useState(null);
@@ -121,17 +68,18 @@ function App() {
   const [accountForm, setAccountForm] = useState({ login: '', password: '', server: '', terminalPath: '' });
   const [symbolQuery, setSymbolQuery] = useState('AUDCAD');
   const [symbolResults, setSymbolResults] = useState([]);
+  const [marketQuery, setMarketQuery] = useState('');
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [positions, setPositions] = useState([]);
+  const [deals, setDeals] = useState([]);
+  const [accountDataLoading, setAccountDataLoading] = useState(false);
   const liveQuote = quotes[selectedSymbol];
-  const baseSymbol = selectedSymbol.replace(/[^A-Z].*$/i, '');
   const series = useMemo(() => {
     const bars = historyBySymbol[selectedSymbol]?.[timeframe] || [];
-    const values = bars.length
-      ? bars.map((bar) => ({ time: new Date(bar.time * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }), price: bar.close }))
-      : buildSeries(timeframe, baseSymbol);
-    if (liveQuote) values[values.length - 1].price = (liveQuote.bid + liveQuote.ask) / 2;
+    const values = bars.map((bar) => ({ time: new Date(bar.time * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }), price: bar.close }));
+    if (liveQuote && values.length) values[values.length - 1].price = (liveQuote.bid + liveQuote.ask) / 2;
     return values;
-  }, [timeframe, baseSymbol, selectedSymbol, historyBySymbol, liveQuote]);
-  const lastPrice = liveQuote ? Number(liveQuote.bid).toFixed(5) : baseSymbol === 'AUDCAD' ? '0.65482' : baseSymbol === 'EURUSD' ? '1.08426' : '1.27194';
+  }, [timeframe, selectedSymbol, historyBySymbol, liveQuote]);
   const todayLabel = new Intl.DateTimeFormat(language === 'ru' ? 'ru-RU' : 'en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase();
 
   useEffect(() => {
@@ -156,6 +104,35 @@ function App() {
       if (event.type === 'error' || event.type === 'warning' || event.type === 'fatal') setMt5Error(event.message || 'MT5 connector error');
     });
   }, []);
+
+  useEffect(() => {
+    if (!window.moneyWork || !mt5Account) {
+      setPositions([]);
+      setDeals([]);
+      return undefined;
+    }
+    let active = true;
+    const refreshAccountData = async () => {
+      setAccountDataLoading(true);
+      try {
+        const [nextPositions, nextDeals] = await Promise.all([
+          window.moneyWork.getMt5Positions(),
+          window.moneyWork.getMt5Deals(30),
+        ]);
+        if (active) {
+          setPositions(nextPositions);
+          setDeals(nextDeals);
+        }
+      } catch (error) {
+        if (active) setMt5Error(error.message);
+      } finally {
+        if (active) setAccountDataLoading(false);
+      }
+    };
+    refreshAccountData();
+    const timer = setInterval(refreshAccountData, 15000);
+    return () => { active = false; clearInterval(timer); };
+  }, [mt5Account]);
 
   useEffect(() => {
     if (!window.moneyWork || !mt5Account || !selectedSymbol) return undefined;
@@ -188,17 +165,78 @@ function App() {
   async function searchInstruments(event) {
     event?.preventDefault();
     if (!window.moneyWork || !mt5Account) {
-      setMt5Error('Connect an MT5 account before searching its available instruments.');
+      setMt5Error('Connect an MT5 account before searching its broker market catalog.');
       return;
     }
     setMt5Error('');
+    setMarketLoading(true);
     try {
       const names = await window.moneyWork.searchMt5Symbols(symbolQuery);
       setSymbolResults(names);
-      if (!names.length) setMt5Error(`No MT5 symbols matched “${symbolQuery}”.`);
+      if (!names.length) setMt5Error(`No MT5 symbols matched “${symbolQuery || 'all markets'}”.`);
     } catch (error) {
       setMt5Error(error.message);
+    } finally {
+      setMarketLoading(false);
     }
+  }
+
+  async function loadBrokerMarkets(event) {
+    event?.preventDefault();
+    if (!window.moneyWork || !mt5Account) {
+      setMt5Error('Connect an MT5 account to load the broker market list.');
+      return;
+    }
+    setMarketLoading(true);
+    setMt5Error('');
+    try {
+      const names = await window.moneyWork.searchMt5Symbols(marketQuery.trim());
+      setSymbolResults(names);
+      if (!names.length) setMt5Error(marketQuery.trim() ? `No broker symbols matched “${marketQuery}”.` : 'The broker returned no symbols.');
+    } catch (error) {
+      setMt5Error(error.message);
+    } finally {
+      setMarketLoading(false);
+    }
+  }
+
+  const liveBars = historyBySymbol[selectedSymbol]?.[timeframe] || [];
+  const analysis = useMemo(() => {
+    if (liveBars.length < 20) return null;
+    const closes = liveBars.map((bar) => Number(bar.close));
+    const ema = (values, period) => {
+      const alpha = 2 / (period + 1);
+      return values.slice(1).reduce((value, price) => alpha * price + (1 - alpha) * value, values[0]);
+    };
+    const recent = closes.slice(-15);
+    let gains = 0;
+    let losses = 0;
+    for (let i = 1; i < recent.length; i += 1) {
+      const delta = recent[i] - recent[i - 1];
+      if (delta > 0) gains += delta; else losses -= delta;
+    }
+    const rsi = losses === 0 ? 100 : 100 - (100 / (1 + gains / losses));
+    const fast = ema(closes.slice(-40), 20);
+    const slow = ema(closes.slice(-50), 50);
+    const trend = fast > slow ? 'Bullish' : fast < slow ? 'Bearish' : 'Flat';
+    const signal = trend === 'Bullish' && rsi < 70 ? 'WATCH BUY' : trend === 'Bearish' && rsi > 30 ? 'WATCH SELL' : 'WAIT';
+    return { rsi, trend, signal, price: closes.at(-1), source: 'MT5 historical bars' };
+  }, [liveBars]);
+
+  async function refreshPositionsNow() {
+    if (!window.moneyWork || !mt5Account) return;
+    setAccountDataLoading(true);
+    try { setPositions(await window.moneyWork.getMt5Positions()); }
+    catch (error) { setMt5Error(error.message); }
+    finally { setAccountDataLoading(false); }
+  }
+
+  async function refreshDealsNow() {
+    if (!window.moneyWork || !mt5Account) return;
+    setAccountDataLoading(true);
+    try { setDeals(await window.moneyWork.getMt5Deals(30)); }
+    catch (error) { setMt5Error(error.message); }
+    finally { setAccountDataLoading(false); }
   }
 
   async function connectAccount(event) {
@@ -214,7 +252,11 @@ function App() {
       setMt5Account(account);
       if (rememberAccount) setSavedAccount({ login: account.login, server: account.server, terminalPath: accountForm.terminalPath });
       setModal('');
-      await subscribeInstrument('AUDCAD', true);
+      const names = await window.moneyWork.searchMt5Symbols('');
+      setSymbolResults(names);
+      const preferred = names.find((name) => name.toUpperCase().startsWith('AUDCAD')) || names[0];
+      if (preferred) await subscribeInstrument(preferred, true);
+      else setMt5Error('The broker returned no available symbols. Check the MT5 Market Watch.');
     } catch (error) {
       setMt5Error(error.message);
     } finally {
@@ -230,7 +272,11 @@ function App() {
       const account = await window.moneyWork.connectSavedMt5();
       setMt5Account(account);
       setModal('');
-      await subscribeInstrument('AUDCAD', true);
+      const names = await window.moneyWork.searchMt5Symbols('');
+      setSymbolResults(names);
+      const preferred = names.find((name) => name.toUpperCase().startsWith('AUDCAD')) || names[0];
+      if (preferred) await subscribeInstrument(preferred, true);
+      else setMt5Error('The broker returned no available symbols. Check the MT5 Market Watch.');
     } catch (error) {
       setMt5Error(error.message);
     } finally {
@@ -270,7 +316,7 @@ function App() {
         <nav className="main-nav">
           {navItems.map(({ label, icon: Icon, count }) => (
             <button key={label} onClick={() => setActiveNav(label)} className={`nav-item ${activeNav === label ? 'active' : ''}`}>
-              <Icon size={17} strokeWidth={1.8} /><span>{t(label)}</span>{count && <b>{count}</b>}
+              <Icon size={17} strokeWidth={1.8} /><span>{t(label)}</span>{label === 'Positions' && mt5Account && positions.length > 0 && <b>{positions.length}</b>}
             </button>
           ))}
         </nav>
@@ -310,138 +356,69 @@ function App() {
           </div>
         </header>
 
-        <div className="page-content">
-          {mt5Error && mt5Account && <div className="connector-banner"><ShieldCheck size={15} /> {mt5Error}<button onClick={() => setMt5Error('')}>Dismiss</button></div>}
-          {activeNav !== 'Overview' && (
-            <div className="section-notice"><Sparkles size={16} /> {activeNav} is part of the Money Work workspace. MT5 quotes/account equity are read-only when connected; order execution is disabled in this build.</div>
-          )}
-          <div className="page-heading">
-            <div>
-              <div className="eyebrow"><span className="eyebrow-line" /> {todayLabel}</div>
-              <h1>{t('Good morning, Alex')} <span className="wave">✦</span></h1>
-              <p>{t('Here’s your trading overview for today.')}</p>
+        <div className="page-content workspace-content">
+          {mt5Error && <div className="connector-banner"><ShieldCheck size={15} /> {mt5Error}<button onClick={() => setMt5Error('')}>Dismiss</button></div>}
+
+          {activeNav === 'Overview' && <>
+            <div className="page-heading compact-heading">
+              <div><div className="eyebrow"><span className="eyebrow-line" /> {todayLabel}</div><h1>{l('Торговый обзор', 'Trading overview')}</h1><p>{l('Только данные подключённого счёта MT5 и выбранного рынка.', 'Live data from the connected MT5 account and selected market only.')}</p></div>
+              {!mt5Account && <button className="connect-button" onClick={() => setModal('connect')}><Plus size={15} /> {l('Подключить MT5', 'Connect MT5')}</button>}
             </div>
-            <div className="heading-actions">
-              <button className="date-button"><Clock3 size={15} /> Last 24 hours <ChevronDown size={14} /></button>
-              <button className="export-button" onClick={() => setModal('demo')}><span className="export-spark">✦</span> Demo workspace</button>
-            </div>
-          </div>
-
-          <section className="metrics-grid">
-            <MetricCard label={mt5Account ? t('MT5 account equity') : t('Demo balance')} value={mt5Account ? `${mt5Account.currency} ${Number(mt5Account.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$12,845.20'} change={mt5Account ? 'Read-only' : '4.8%'} note={mt5Account ? `Account ${mt5Account.login}` : 'sample · vs. last week'} icon={Wallet} tone="blue" neutral={Boolean(mt5Account)} />
-            <MetricCard label={t('Paper P&L')} value="+$284.50" change="2.26%" note="sample simulation" icon={TrendingUp} tone="green" />
-            <MetricCard label={t('Demo win rate')} value="64.7%" change="3.2%" note="sample · last 30 trades" icon={Gauge} tone="purple" />
-            <MetricCard label={t('Demo max drawdown')} value="1.82%" change="0.4%" note="sample value" icon={ShieldCheck} tone="amber" positive={false} />
-          </section>
-
-          <section className="primary-grid">
-            <article className="panel chart-panel">
-              <div className="panel-heading chart-heading">
-                <div className="instrument-title">
-                  <div className="pair-icon">{selectedSymbol.slice(0, 2)}</div>
-                  <div><div className="pair-name">{selectedSymbol} <ChevronDown size={14} /></div><span>Forex · {mt5Account ? 'Live MT5 feed' : 'Bybit MT5 CFD'} <i className="market-open-dot" /> {mt5Account ? 'Connected' : 'Sample market'}</span></div>
-                </div>
-                <div className="chart-heading-right">
-                  <div className="timeframe-switcher">
-                    {['1M', '5M', '15M', '1H'].map((t) => <button key={t} onClick={() => setTimeframe(t)} className={timeframe === t ? 'selected' : ''}>{t}</button>)}
-                  </div>
-                  <button className="chart-more" aria-label="Chart settings"><Settings2 size={16} /></button>
-                </div>
-              </div>
-              <div className="price-row"><strong>{lastPrice}</strong><span className="price-change">{liveQuote ? 'REAL-TIME TICK' : '+0.00273 (sample)'}</span><span className="price-meta">Bid {liveQuote ? Number(liveQuote.bid).toFixed(5) : '0.65479'} <i /> Ask {liveQuote ? Number(liveQuote.ask).toFixed(5) : '0.65486'}</span></div>
-              <div className="chart-legend"><span><i className="legend-line" /> {selectedSymbol}</span><span><i className="legend-ema" /> EMA 20</span><span className="chart-period">Broker time · UTC +0</span></div>
-              <div className="chart-wrap">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={series} margin={{ top: 14, right: 10, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#75a7ff" stopOpacity={0.2} /><stop offset="95%" stopColor="#75a7ff" stopOpacity={0} /></linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="#252a36" strokeDasharray="3 5" vertical={false} />
-                    <XAxis dataKey="time" tick={{ fill: '#666e7d', fontSize: 10 }} tickLine={false} axisLine={false} interval={7} />
-                    <YAxis orientation="right" domain={['dataMin - 0.00035', 'dataMax + 0.00035']} tick={{ fill: '#666e7d', fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={(value) => value.toFixed(4)} width={56} />
-                    <Tooltip contentStyle={{ background: '#171b25', border: '1px solid #2b3242', borderRadius: 10, color: '#ecf1fa', fontSize: 12 }} formatter={(value) => [Number(value).toFixed(5), selectedSymbol]} labelStyle={{ color: '#8b96a8' }} />
-                    <Area type="monotone" dataKey="price" stroke="#78a6ff" strokeWidth={2} fill="url(#priceFill)" activeDot={{ r: 4, fill: '#a6c4ff', stroke: '#10151f', strokeWidth: 2 }} />
-                  </AreaChart>
-                </ResponsiveContainer>
-                <div className="chart-live-label"><span /> {lastPrice}</div>
-              </div>
-              <div className="chart-foot"><span><i className="legend-dot blue-dot" /> {liveQuote ? 'Live MT5 tick · polling every second' : 'Sample price series · illustrative only'}</span><span>{liveQuote ? new Date((liveQuote.time || Date.now() / 1000) * 1000).toLocaleTimeString() : 'Demo data'} <span className="refresh-mark">↻</span></span></div>
+            <section className="summary-grid">
+              <article className="summary-card panel"><span>{mt5Account ? l('Средства счёта', 'Account equity') : l('Счёт MT5', 'MT5 account')}</span><strong>{mt5Account ? `${mt5Account.currency} ${Number(mt5Account.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : l('Не подключён', 'Not connected')}</strong><small>{mt5Account ? `${mt5Account.login} · ${mt5Account.accountType === 'demo' ? 'DEMO' : 'LIVE'}` : l('Котировки и позиции недоступны', 'Quotes and positions unavailable')}</small></article>
+              <article className="summary-card panel"><span>{l('Выбранный рынок', 'Selected market')}</span><strong>{selectedSymbol}</strong><small>{liveQuote ? `${Number(liveQuote.bid).toFixed(5)} / ${Number(liveQuote.ask).toFixed(5)}` : l('Нет живой котировки', 'No live quote')}</small></article>
+              <article className="summary-card panel"><span>{l('Открытые позиции', 'Open positions')}</span><strong>{mt5Account ? positions.length : '—'}</strong><small>{accountDataLoading ? l('Обновление…', 'Refreshing…') : mt5Account ? l('Данные MT5', 'MT5 account data') : l('Подключите счёт MT5', 'Connect an MT5 account')}</small></article>
+            </section>
+            <article className="panel chart-panel dashboard-chart">
+              <div className="panel-heading chart-heading"><div className="instrument-title"><div className="pair-icon">{selectedSymbol.slice(0, 2)}</div><div><div className="pair-name">{selectedSymbol}</div><span>{liveQuote ? l('Живой поток MT5', 'Live MT5 feed') : l('Ожидание котировок MT5', 'Waiting for MT5 quotes')}</span></div></div><div className="timeframe-switcher">{['1M', '5M', '15M', '1H'].map((frame) => <button key={frame} onClick={() => setTimeframe(frame)} className={timeframe === frame ? 'selected' : ''}>{frame}</button>)}</div></div>
+              <div className="price-row"><strong>{liveQuote ? Number(liveQuote.bid).toFixed(5) : '—'}</strong><span className="price-change">{liveQuote ? 'LIVE' : l('НЕТ ДАННЫХ', 'NO DATA')}</span>{liveQuote && <span className="price-meta">Bid {Number(liveQuote.bid).toFixed(5)} · Ask {Number(liveQuote.ask).toFixed(5)}</span>}</div>
+              {series.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={series} margin={{ top: 14, right: 10, left: 0, bottom: 0 }}><defs><linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#75a7ff" stopOpacity={0.2} /><stop offset="95%" stopColor="#75a7ff" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#252a36" strokeDasharray="3 5" vertical={false} /><XAxis dataKey="time" tick={{ fill: '#8b96a8', fontSize: 10 }} tickLine={false} axisLine={false} interval="preserveStartEnd" /><YAxis orientation="right" domain={['auto', 'auto']} tick={{ fill: '#8b96a8', fontSize: 10 }} tickLine={false} axisLine={false} width={64} /><Tooltip contentStyle={{ background: '#171b25', border: '1px solid #2b3242', borderRadius: 10, color: '#ecf1fa', fontSize: 12 }} formatter={(value) => [Number(value).toFixed(5), selectedSymbol]} /><Area type="monotone" dataKey="price" stroke="#78a6ff" strokeWidth={2} fill="url(#priceFill)" /></AreaChart></ResponsiveContainer></div> : <div className="empty-chart"><Activity size={22} /><strong>{l('График пока пуст', 'No chart data yet')}</strong><span>{mt5Account ? l('Выберите доступный символ на вкладке «Рынки».', 'Choose a broker symbol on the Markets tab.') : l('Подключите демо- или live-счёт MT5, чтобы загрузить рынки.', 'Connect an MT5 demo or live account to load markets.')}</span></div>}
+              <div className="chart-foot"><span><i className="legend-dot blue-dot" />{liveQuote ? l('Котировка обновляется через MT5', 'Quote received from MT5') : l('Демо-данные не подставляются', 'No sample prices are shown')}</span><span>{liveQuote ? new Date((liveQuote.time || Date.now() / 1000) * 1000).toLocaleTimeString() : '—'}</span></div>
             </article>
+            <section className="analysis-agent-grid">
+              <article className="panel work-card">
+                <div className="work-card-heading"><div><span className="section-kicker"><Sparkles size={14} /> {l('АНАЛИЗ РЫНКА', 'MARKET ANALYSIS')}</span><h2>{l('Технический анализатор', 'Technical analyzer')}</h2></div><span className="status-badge">{analysis ? l('MT5 ДАННЫЕ', 'MT5 DATA') : l('ОЖИДАЕТ', 'WAITING')}</span></div>
+                {analysis ? <><div className="analysis-signal"><strong>{analysis.signal}</strong><span>{selectedSymbol} · {analysis.trend}</span></div><div className="analysis-stats"><div><small>RSI (14)</small><strong>{analysis.rsi.toFixed(1)}</strong></div><div><small>EMA trend</small><strong>{analysis.trend}</strong></div><div><small>{l('Последняя цена', 'Last close')}</small><strong>{analysis.price.toFixed(5)}</strong></div></div><p className="muted-copy">{l('Сигнал рассчитан по доступным барам MT5; это индикатор, а не прогноз или гарантия результата.', 'Computed from available MT5 bars; this is an indicator, not a forecast or guarantee.')}</p></> : <div className="empty-inline">{l('Для расчёта нужны минимум 20 реальных баров MT5. Подключите счёт и выберите рынок.', 'At least 20 real MT5 bars are required. Connect an account and select a market.')}</div>}
+              </article>
+              <article className="panel work-card agent-card">
+                <div className="work-card-heading"><div><span className="section-kicker"><Zap size={14} /> {l('AI АГЕНТ', 'AI AGENT')}</span><h2>{l('Автономный режим', 'Autonomous mode')}</h2></div><span className="status-badge muted">{l('НЕ АКТИВЕН', 'NOT ACTIVE')}</span></div>
+                <p className="muted-copy">{l('Ордеры и онлайн-обучение не включены. Сначала нужны проверка стратегий, демо-тест и заданные лимиты риска.', 'Order execution and online learning are not enabled. Strategy validation, demo testing and explicit risk limits are required first.')}</p>
+                <div className="agent-checklist"><span><ShieldCheck size={14} /> {l('Поток MT5', 'MT5 feed')}: {mt5Account ? l('подключён', 'connected') : l('нет', 'not connected')}</span><span><LockKeyhole size={14} /> {l('Исполнение ордеров', 'Order execution')}: {l('заблокировано', 'disabled')}</span><span><Activity size={14} /> {l('Режим', 'Mode')}: {l('только анализ', 'analysis only')}</span></div>
+                <button className="secondary-action" onClick={() => setActiveNav('Strategies')}>{l('Открыть каталог стратегий', 'Open strategy library')} <ArrowUpRight size={14} /></button>
+              </article>
+            </section>
+          </>}
 
-            <article className="panel insight-panel">
-              <div className="panel-heading insight-heading"><div><div className="section-kicker"><Sparkles size={14} /> MARKET PULSE</div><h2>{t('AI market read')}</h2></div><button className="more-button"><MoreHorizontal size={18} /></button></div>
-              <div className="signal-block">
-                <div className="signal-topline"><span className="signal-neutral"><span /> WAIT</span><span className="signal-sample">SAMPLE</span></div>
-                <div className="signal-title">No clear edge yet</div>
-                <p className="signal-copy">Price is holding above the short-term average, but momentum is mixed. Waiting for confirmation helps avoid chasing.</p>
-                <div className="confidence-row"><span>Signal confidence</span><strong>72%</strong></div>
-                <div className="confidence-track"><span style={{ width: '72%' }} /></div>
-                <div className="confidence-scale"><span>Low confidence</span><span>High confidence</span></div>
-              </div>
-              <div className="indicator-list">
-                <div><span className="indicator-name"><i className="indicator-bullet violet" /> RSI (14)</span><strong>54.8 <small>Neutral</small></strong></div>
-                <div><span className="indicator-name"><i className="indicator-bullet blue" /> EMA trend</span><strong>Upward <small className="positive-text">+0.08%</small></strong></div>
-                <div><span className="indicator-name"><i className="indicator-bullet orange" /> Volatility</span><strong>Low <small>Stable</small></strong></div>
-              </div>
-              <div className="insight-disclaimer"><LockKeyhole size={13} /> Illustrative demo analysis — not a live signal.</div>
-            </article>
-          </section>
+          {activeNav === 'Markets' && <section className="page-section">
+            <div className="section-page-heading"><div><span className="section-kicker">MT5 MARKET WATCH</span><h1>{l('Рынки', 'Markets')}</h1><p>{l('Каталог именно того брокера, к которому подключён MT5.', 'The instrument catalog from your connected MT5 broker.')}</p></div><button className="secondary-action" onClick={loadBrokerMarkets} disabled={!mt5Account || marketLoading}><RefreshCw size={14} /> {marketLoading ? l('Загрузка…', 'Loading…') : l('Загрузить все рынки', 'Load all markets')}</button></div>
+            <form className="market-search" onSubmit={loadBrokerMarkets}><Search size={16} /><input value={marketQuery} onChange={(event) => setMarketQuery(event.target.value)} placeholder={l('Поиск символа, например AUDCAD', 'Search symbol, e.g. AUDCAD')} /><button className="modal-primary" disabled={!mt5Account || marketLoading}>{l('Найти', 'Search')}</button></form>
+            {!mt5Account ? <div className="empty-state"><TrendingUp size={28} /><h2>{l('Подключите MT5, чтобы увидеть доступные рынки', 'Connect MT5 to see available markets')}</h2><p>{l('Сейчас реальные котировки и брокерский список не загружаются. Подключается demo или live счёт.', 'Broker instruments and live quotes are not loaded. Either a demo or live account can be connected.')}</p><button className="connect-button" onClick={() => setModal('connect')}><Plus size={15} /> {l('Подключить счёт', 'Connect account')}</button></div> : <div className="market-list">{symbolResults.length ? symbolResults.map((symbol) => { const q = quotes[symbol]; return <button className={`market-row ${symbol === selectedSymbol ? 'selected' : ''}`} key={symbol} onClick={async () => { await subscribeInstrument(symbol); setActiveNav('Overview'); }}><span className="market-symbol">{symbol}</span><span>{q ? `${Number(q.bid).toFixed(5)} / ${Number(q.ask).toFixed(5)}` : l('Нажмите для загрузки котировки', 'Select to load quote')}</span><span className={q ? 'live-tag' : 'market-dash'}>{q ? 'LIVE' : '—'}</span></button>; }) : <div className="empty-inline">{l('Нажмите «Загрузить все рынки» или выполните поиск.', 'Click “Load all markets” or search for a symbol.')}</div>}</div>}
+          </section>}
 
-          <section className="secondary-grid">
-            <article className="panel watchlist-panel">
-              <div className="panel-heading"><div><div className="section-kicker">MARKET WATCH</div><h2>{t('Favorite instruments')}</h2></div><button className="add-small" onClick={() => setModal('instruments')}><Plus size={14} /> Add</button></div>
-              <div className="table-head"><span>INSTRUMENT</span><span>LAST PRICE</span><span>24H CHANGE</span><span /></div>
-              <div className="instrument-list">
-                {symbolRows.map((item) => {
-                  const liveEntry = Object.entries(quotes).find(([symbol]) => symbol.toUpperCase().startsWith(item.symbol));
-                  const livePrice = liveEntry ? Number(liveEntry[1].bid).toFixed(5) : item.price;
-                  return (
-                    <button key={item.symbol} className={`instrument-row ${baseSymbol === item.symbol ? 'chosen' : ''}`} onClick={() => mt5Account ? subscribeInstrument(item.symbol) : setSelectedSymbol(item.symbol)}>
-                      <span className="instrument-cell"><span className={`currency-icon ${item.symbol}`}>{item.icon}</span><span><strong>{item.symbol}</strong><small>{item.name}</small></span></span>
-                      <strong className="row-price">{livePrice}</strong>
-                      <span className={`row-change ${item.positive ? 'up' : 'down'}`}>{liveEntry ? 'LIVE' : item.change}</span>
-                      <span className="mini-sparkline"><svg viewBox="0 0 80 25" preserveAspectRatio="none"><polyline points={item.positive ? '1,19 12,16 23,18 34,11 45,13 56,7 68,10 79,3' : '1,5 12,8 23,6 34,14 45,11 56,18 68,13 79,22'} /></svg></span>
-                    </button>
-                  );
-                })}
-              </div>
-              <button className="view-all-button" onClick={() => setActiveNav('Markets')}>View all markets <ArrowUpRight size={14} /></button>
-            </article>
+          {activeNav === 'Positions' && <section className="page-section">
+            <div className="section-page-heading"><div><span className="section-kicker">{mt5Account ? `${mt5Account.accountType.toUpperCase()} MT5` : 'MT5'}</span><h1>{l('Открытые позиции', 'Open positions')}</h1><p>{l('Позиции считываются из подключённого MT5; здесь нет демонстрационных строк.', 'Positions are read from connected MT5; no sample rows are shown here.')}</p></div><button className="secondary-action" onClick={refreshPositionsNow} disabled={!mt5Account || accountDataLoading}><RefreshCw size={14} /> {l('Обновить', 'Refresh')}</button></div>
+            {!mt5Account ? <div className="empty-state"><Wallet size={28} /><h2>{l('Нет подключённого торгового счёта', 'No trading account connected')}</h2><button className="connect-button" onClick={() => setModal('connect')}><Plus size={15} /> {l('Подключить MT5', 'Connect MT5')}</button></div> : positions.length ? <div className="data-table-wrap"><table className="data-table"><thead><tr><th>{l('Инструмент', 'Instrument')}</th><th>{l('Направление', 'Side')}</th><th>{l('Объём', 'Volume')}</th><th>{l('Вход', 'Entry')}</th><th>{l('Цена', 'Current')}</th><th>{l('Плавающий P&L', 'Floating P&L')}</th><th>SL / TP</th></tr></thead><tbody>{positions.map((position) => <tr key={position.ticket}><td><strong>{position.symbol}</strong><small>#{position.ticket}</small></td><td><span className={`position-type ${position.type === 'BUY' ? 'buy-type' : 'sell-type'}`}>{position.type}</span></td><td>{position.volume}</td><td>{position.openPrice}</td><td>{position.currentPrice}</td><td className={position.profit >= 0 ? 'positive-text' : 'negative-text'}>{(position.profit + position.swap).toFixed(2)} {mt5Account.currency}</td><td>{position.stopLoss || '—'} / {position.takeProfit || '—'}</td></tr>)}</tbody></table></div> : <div className="empty-state"><Wallet size={28} /><h2>{l('Открытых позиций нет', 'No open positions')}</h2><p>{l('Если сделки есть в терминале, проверьте что Money Work подключён к тому же логину и серверу.', 'If positions appear in your terminal, verify Money Work uses the same login and server.')}</p></div>}
+          </section>}
 
-            <article className="panel activity-panel">
-              <div className="panel-heading"><div><div className="section-kicker">RECENT ACTIVITY</div><h2>{t('Paper trades')}</h2></div><button className="filter-button">Last 7 days <ChevronDown size={13} /></button></div>
-              <div className="activity-list">
-                {activities.map((item, index) => (
-                  <div className="activity-row" key={`${item.pair}-${index}`}>
-                    <div className={`activity-direction ${item.side.toLowerCase()}`}>{item.side === 'Buy' ? <ArrowDownRight size={16} /> : <ArrowUpRight size={16} />}</div>
-                    <div className="activity-main"><strong>{item.pair} <span className={item.positive ? 'buy-text' : 'sell-text'}>{item.side}</span></strong><small>{item.amount} · {item.time}</small></div>
-                    <div className="activity-result"><span className={`status-chip ${item.status.includes('open') ? 'open' : ''}`}>{item.status}</span><small className={item.positive ? 'positive-text' : 'negative-text'}>{item.positive ? '+$18.40' : '−$7.25'}</small></div>
-                  </div>
-                ))}
-              </div>
-              <button className="view-all-button" onClick={() => setActiveNav('History')}>View activity <ArrowUpRight size={14} /></button>
-            </article>
-          </section>
+          {activeNav === 'History' && <section className="page-section">
+            <div className="section-page-heading"><div><span className="section-kicker">{l('ПОСЛЕДНИЕ 30 ДНЕЙ', 'LAST 30 DAYS')}</span><h1>{l('История сделок', 'Trade history')}</h1><p>{l('Закрытые и учтённые сделки, прочитанные из истории MT5.', 'Closed and recorded deals read from MT5 account history.')}</p></div><button className="secondary-action" onClick={refreshDealsNow} disabled={!mt5Account || accountDataLoading}><RefreshCw size={14} /> {l('Обновить', 'Refresh')}</button></div>
+            {!mt5Account ? <div className="empty-state"><Clock3 size={28} /><h2>{l('Подключите MT5 для загрузки истории', 'Connect MT5 to load history')}</h2><button className="connect-button" onClick={() => setModal('connect')}><Plus size={15} /> {l('Подключить счёт', 'Connect account')}</button></div> : deals.length ? <div className="data-table-wrap"><table className="data-table"><thead><tr><th>{l('Время', 'Time')}</th><th>{l('Инструмент', 'Instrument')}</th><th>{l('Тип', 'Type')}</th><th>{l('Объём', 'Volume')}</th><th>{l('Цена', 'Price')}</th><th>{l('Результат', 'Net result')}</th><th>{l('Комментарий', 'Comment')}</th></tr></thead><tbody>{[...deals].reverse().map((deal) => { const net = deal.profit + deal.commission + deal.swap; return <tr key={deal.ticket}><td>{new Date(deal.time * 1000).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')}</td><td><strong>{deal.symbol || '—'}</strong></td><td>{deal.type}</td><td>{deal.volume}</td><td>{deal.price}</td><td className={net >= 0 ? 'positive-text' : 'negative-text'}>{net.toFixed(2)} {mt5Account.currency}</td><td>{deal.comment || '—'}</td></tr>; })}</tbody></table></div> : <div className="empty-state"><Clock3 size={28} /><h2>{l('В выбранном периоде сделок нет', 'No deals in selected period')}</h2></div>}
+          </section>}
 
-          <section className="bottom-grid">
-            <article className="panel positions-panel">
-              <div className="panel-heading"><div><div className="section-kicker">OPEN POSITIONS</div><h2>{t('Demo positions')} <span className="count-badge">2</span></h2></div><button className="filter-button">All accounts <ChevronDown size={13} /></button></div>
-              <div className="position-table-head"><span>INSTRUMENT</span><span>TYPE</span><span>SIZE</span><span>ENTRY</span><span>MARK</span><span>UNREALIZED P&L</span><span /></div>
-              <div className="position-row"><div className="position-symbol"><div className="pair-icon mini">AU</div><div><strong>AUDCAD</strong><small>Buy · 15M</small></div></div><span className="position-type buy-type">BUY</span><span>0.08 lot</span><span>0.65296</span><span>0.65482</span><strong className="positive-text">+$14.88</strong><button className="row-more"><MoreHorizontal size={17} /></button></div>
-              <div className="position-row"><div className="position-symbol"><div className="pair-icon mini euro">EU</div><div><strong>EURUSD</strong><small>Sell · 1H</small></div></div><span className="position-type sell-type">SELL</span><span>0.05 lot</span><span>1.08502</span><span>1.08426</span><strong className="positive-text">+$3.80</strong><button className="row-more"><MoreHorizontal size={17} /></button></div>
-            </article>
+          {activeNav === 'Strategies' && <section className="page-section">
+            <div className="section-page-heading"><div><span className="section-kicker">RESEARCH LIBRARY</span><h1>{l('Библиотека стратегий', 'Strategy library')}</h1><p>{l('Набор базовых подходов для тестирования; это не все стратегии и не обещание доходности.', 'A starter set of common approaches to test; not every strategy and not a profit guarantee.')}</p></div></div>
+            <div className="strategy-grid">{[
+              ['EMA crossover', l('Следование за трендом: пересечение быстрой и медленной EMA.', 'Trend following: fast/slow EMA crossover.')],
+              ['RSI mean reversion', l('Контртрендовый вход по зонам перекупленности/перепроданности.', 'Countertrend setup using overbought/oversold zones.')],
+              ['Range breakout', l('Пробой диапазона с фильтром волатильности и подтверждением закрытия бара.', 'Range breakout with volatility filter and bar-close confirmation.')],
+              ['Session momentum', l('Сравнение волатильности и импульса в выбранной торговой сессии.', 'Compare volatility and momentum during a selected trading session.')],
+            ].map(([name, description]) => <article className="panel strategy-card" key={name}><span className="strategy-mark"><Sparkles size={15} /></span><h2>{name}</h2><p>{description}</p><span className="strategy-status">{l('ДЕМО-ТЕСТ НУЖЕН', 'DEMO TEST REQUIRED')}</span></article>)}</div>
+            <div className="research-note"><CircleHelp size={16} /><span>{l('Невозможно надёжно загрузить «все стратегии из интернета». Каждую стратегию нужно проверять на конкретном инструменте, таймфрейме, спреде и комиссии с защитой от подгонки под историю.', 'There is no reliable way to load “every strategy on the internet”. Each strategy must be tested for the instrument, timeframe, spread and fees while controlling for overfitting.')}</span></div>
+          </section>}
 
-            <article className="panel bot-panel">
-              <div className="bot-head"><div className="bot-icon"><Zap size={17} fill="currentColor" /></div><div><div className="section-kicker">AUTOMATION</div><h2>{t('Strategy runner')}</h2></div><span className="demo-chip">PAPER</span></div>
-              <p className="bot-description">Test your rules on simulated data before connecting a broker.</p>
-              <div className="bot-status"><span className={`bot-status-dot ${demoRunning ? 'running' : ''}`} /><span>{demoRunning ? 'Paper simulation running' : 'Simulation is paused'}</span><span className="bot-time">No live orders</span></div>
-              <div className="risk-setting"><div><span>Daily loss guard</span><small>Demo limit · $250</small></div><button className={`toggle ${riskEnabled ? 'on' : ''}`} onClick={() => setRiskEnabled(!riskEnabled)} aria-label="Toggle daily risk guard"><i /></button></div>
-              <button className={`run-button ${demoRunning ? 'pause' : ''}`} onClick={() => setDemoRunning(!demoRunning)}>{demoRunning ? <><Pause size={15} fill="currentColor" /> {t('Pause demo')}</> : <><Play size={15} fill="currentColor" /> {t('Start paper simulation')}</>}</button>
-              <div className="live-lock"><LockKeyhole size={12} /> Live trading is not enabled in this build</div>
-            </article>
-          </section>
+          {['Risk controls', 'Reports'].includes(activeNav) && <section className="page-section"><div className="section-page-heading"><div><span className="section-kicker">MONEY WORK</span><h1>{t(activeNav)}</h1><p>{l('Раздел будет заполнен после добавления проверяемых данных счёта.', 'This section will be populated from verified account data.')}</p></div></div><div className="empty-state"><ShieldCheck size={28} /><h2>{l('Пока нет данных для отображения', 'No data to display yet')}</h2></div></section>}
 
-          <footer className="footer-note"><span><ShieldCheck size={13} /> {mt5Account ? 'MT5 quotes live · AI readout and positions remain sample data.' : 'Demo only · Numbers and charts are illustrative, not live market data.'}</span><span>Money Work <b>v{packageJson.version}</b><i /> Built for focused trading</span></footer>
+          <footer className="footer-note"><span><ShieldCheck size={13} />{mt5Account ? l('Данные счёта читаются из MT5.', 'Account data is read from MT5.') : l('Реальные рынки появятся после подключения MT5.', 'Live broker markets appear after MT5 is connected.')}</span><span>Money Work <b>v{packageJson.version}</b></span></footer>
         </div>
       </main>
 

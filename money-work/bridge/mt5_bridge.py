@@ -9,7 +9,7 @@ import json
 import sys
 import threading
 import time
-import traceback
+from datetime import datetime, timedelta
 
 try:
     import MetaTrader5 as mt5
@@ -76,15 +76,14 @@ def connect(payload: dict) -> dict:
 
 def get_symbols(query: str) -> list[str]:
     text = query.strip().upper()
-    if not text:
-        raise ValueError("Enter a symbol or symbol fragment, e.g. AUDCAD.")
     with _mt5_lock:
         if not _connected:
             raise RuntimeError("Connect an MT5 account first.")
         all_symbols = mt5.symbols_get()
         if all_symbols is None:
             raise RuntimeError(f"Could not read MT5 symbols: {mt5.last_error()}")
-        return [str(item.name) for item in all_symbols if text in str(item.name).upper()][:100]
+        matches = [str(item.name) for item in all_symbols if not text or text in str(item.name).upper()]
+        return matches[:500]
 
 
 def subscribe(symbol: str) -> dict:
@@ -105,6 +104,55 @@ def subscribe(symbol: str) -> dict:
         with _state_lock:
             _active_symbols.add(name)
         return {"symbol": name, "bid": float(tick.bid), "ask": float(tick.ask), "time": int(tick.time)}
+
+
+def get_positions() -> list[dict]:
+    with _mt5_lock:
+        if not _connected:
+            raise RuntimeError("Connect an MT5 account first.")
+        positions = mt5.positions_get()
+        if positions is None:
+            raise RuntimeError(f"Could not read open MT5 positions: {mt5.last_error()}")
+        return [{
+            "ticket": int(row.ticket),
+            "symbol": str(row.symbol),
+            "type": "BUY" if int(row.type) == mt5.POSITION_TYPE_BUY else "SELL",
+            "volume": float(row.volume),
+            "openPrice": float(row.price_open),
+            "currentPrice": float(row.price_current),
+            "profit": float(row.profit),
+            "swap": float(row.swap),
+            "stopLoss": float(row.sl),
+            "takeProfit": float(row.tp),
+            "time": int(row.time),
+            "comment": str(row.comment),
+        } for row in positions]
+
+
+def get_deals(days: int = 30) -> list[dict]:
+    lookback = max(1, min(int(days), 365))
+    with _mt5_lock:
+        if not _connected:
+            raise RuntimeError("Connect an MT5 account first.")
+        rows = mt5.history_deals_get(datetime.now() - timedelta(days=lookback), datetime.now())
+        if rows is None:
+            raise RuntimeError(f"Could not read MT5 deal history: {mt5.last_error()}")
+        result = [{
+            "ticket": int(row.ticket),
+            "order": int(row.order),
+            "positionId": int(row.position_id),
+            "symbol": str(row.symbol),
+            "type": "BUY" if int(row.type) == mt5.DEAL_TYPE_BUY else "SELL" if int(row.type) == mt5.DEAL_TYPE_SELL else "OTHER",
+            "entry": int(row.entry),
+            "volume": float(row.volume),
+            "price": float(row.price),
+            "profit": float(row.profit),
+            "commission": float(row.commission),
+            "swap": float(row.swap),
+            "time": int(row.time),
+            "comment": str(row.comment),
+        } for row in rows]
+        return result[-1000:]
 
 
 def get_history(symbol: str, timeframe: str) -> list[dict]:
@@ -173,6 +221,10 @@ def handle(command: dict) -> None:
             response(request_id, True, quote=subscribe(str(command.get("symbol", ""))))
         elif action == "history":
             response(request_id, True, bars=get_history(str(command.get("symbol", "")), str(command.get("timeframe", "15M"))))
+        elif action == "positions":
+            response(request_id, True, positions=get_positions())
+        elif action == "deals":
+            response(request_id, True, deals=get_deals(command.get("days", 30)))
         elif action == "disconnect":
             disconnect()
             response(request_id, True, disconnected=True)

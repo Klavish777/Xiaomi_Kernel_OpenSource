@@ -194,6 +194,16 @@ ipcMain.handle('mt5:history', async (_event, symbol, timeframe) => {
   return result.bars || [];
 });
 
+ipcMain.handle('mt5:positions', async () => {
+  const result = await bridgeRequest('positions');
+  return result.positions || [];
+});
+
+ipcMain.handle('mt5:deals', async (_event, days) => {
+  const result = await bridgeRequest('deals', { days: Number(days) || 30 });
+  return result.deals || [];
+});
+
 app.whenReady().then(createWindow);
 app.on('before-quit', () => {
   try { if (bridge && bridge.exitCode === null) bridge.kill(); } catch (_) { /* best-effort cleanup */ }

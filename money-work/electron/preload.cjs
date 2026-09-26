@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('moneyWork', {
   searchMt5Symbols: (query) => ipcRenderer.invoke('mt5:symbols', query),
   subscribeMt5Symbol: (symbol) => ipcRenderer.invoke('mt5:subscribe', symbol),
   getMt5History: (symbol, timeframe) => ipcRenderer.invoke('mt5:history', symbol, timeframe),
+  getMt5Positions: () => ipcRenderer.invoke('mt5:positions'),
+  getMt5Deals: (days) => ipcRenderer.invoke('mt5:deals', days),
   onMt5Event: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('mt5:event', listener);
