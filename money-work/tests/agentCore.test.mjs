@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, compareAppVersions, computeRuleSignal, findNewerAppRelease, isInsideSchedule, marketTimestampMs, mergeMarketTick, normalizeMarketTimestamp, normalizeBankOfCanadaReference, summarizePaperHistory, movingAverageValues, sliceChartHistory, mergeHistoryBars, summarizeAccountPerformance, updateTickCadence, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
+import { buildAnalystConsensus, compareAppVersions, computeRuleSignal, findNewerAppRelease, isInsideSchedule, marketTimestampMs, mergeMarketTick, normalizeMarketTimestamp, normalizeBankOfCanadaReference, movingAverageValues, sliceChartHistory, mergeHistoryBars, summarizeAccountPerformance, updateTickCadence, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
 
 test('schedule follows selected local weekdays and inclusive start/exclusive end', () => {
   const mondayMorning = new Date(2026, 8, 28, 9, 0);
@@ -121,6 +121,8 @@ test('version checker selects only a newer Money Work release tag', () => {
   assert.equal(compareAppVersions('0.4.16', '0.4.15'), 1);
   assert.equal(compareAppVersions('0.4.16', '0.4.16'), 0);
   assert.equal(compareAppVersions('0.4.15', '0.4.16'), -1);
+  assert.equal(compareAppVersions('1.0.0-rc.1', '0.4.17'), 1);
+  assert.equal(compareAppVersions('1.0.0', '1.0.0-rc.1'), 1);
   assert.equal(compareAppVersions('bad', '0.4.16'), null);
 });
 
@@ -163,91 +165,11 @@ test('three-analyst consensus requires directional data, fresh quote, validated 
   const pausedAgent = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote, referenceData, brokerStatus: { state: 'analyst_paused' }, now });
   assert.equal(pausedAgent.entryAllowed, false);
   assert.equal(pausedAgent.reason, 'analyst_paused');
+  const cooldown = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote, referenceData, brokerStatus: { state: 'learning_cooldown', consecutiveLosses: 2 }, now });
+  assert.equal(cooldown.entryAllowed, false);
+  assert.equal(cooldown.reason, 'learning_cooldown');
+  assert.equal(cooldown.analysts.learning.state, 'learning_cooldown');
   assert.equal(validateReferenceRecord({ ...referenceData, fetchedAt: '2000-01-01T00:00:00Z' }, now).valid, false);
-});
-
-test('paper history applies the same two-loss cooldown and recent-win-rate safeguard', () => {
-  const now = new Date('2026-09-26T12:00:00Z');
-  const losses = [
-    { status: 'closed', pnl: -1, closeTime: '2026-09-26T11:59:00Z' },
-    { status: 'closed', pnl: -2, closeTime: '2026-09-26T11:58:00Z' },
-    { status: 'closed', pnl: 3, closeTime: '2026-09-26T11:00:00Z' },
-  ];
-  const stats = summarizePaperHistory(losses, now);
-  assert.equal(stats.closedTrades, 3);
-  assert.equal(stats.consecutiveLosses, 2);
-  assert.equal(stats.state, 'learning_cooldown');
-  const consensus = buildAnalystConsensus({
-    analysis: { signal: 'WATCH BUY', rsi: 55 },
-    quote: { bid: 0.9, ask: 0.9001, timeMsc: now.getTime() },
-    referenceData: { base: 'AUD', rate: 0.91, sourceDate: '2026-09-25', fetchedAt: now.toISOString() },
-    brokerStatus: stats,
-    now,
-  });
-  assert.equal(consensus.entryAllowed, false);
-  assert.equal(consensus.reason, 'learning_cooldown');
-  assert.equal(summarizePaperHistory([{ ...losses[0], closeTime: '2026-09-26T10:30:00Z' }], now).state, undefined);
-});
-
-test('paper agent latches off at 80 million equity and closes its open virtual position', () => {
-  const now = new Date('2026-09-26T12:00:00Z');
-  const settings = { capital: MAX_AGENT_EQUITY, maxAllocation: 1000, start: '00:00', end: '23:59', days: [0, 1, 2, 3, 4, 5, 6] };
-  const openPositionState = {
-    enabled: true,
-    capital: MAX_AGENT_EQUITY - 1,
-    realizedPnl: 0,
-    trades: [{ id: 'goal-position', symbol: 'AUDCAD', direction: 1, side: 'BUY', openPrice: 1, units: 2, status: 'open' }],
-    position: { id: 'goal-position', symbol: 'AUDCAD', direction: 1, side: 'BUY', openPrice: 1, units: 2, status: 'open' },
-  };
-  const stopped = advancePaperAgent(openPositionState, { signal: 'WATCH BUY', price: 1.5, quoteTime: 5000, symbol: 'AUDCAD', settings, now });
-  assert.equal(stopped.enabled, false);
-  assert.equal(stopped.goalReached, true);
-  assert.equal(stopped.position, null);
-  assert.equal(stopped.trades[0].status, 'closed');
-  const deposit = adjustVirtualBalance({ capital: MAX_AGENT_EQUITY - 10, realizedPnl: 0, cashFlows: [] }, 1, 10, now);
-  assert.equal(deposit.ok, true);
-  assert.equal(deposit.state.goalReached, true);
-});
-
-test('paper learner can block new entries without interfering with position closure', () => {
-  const settings = { capital: 1000, maxAllocation: 500, start: '00:00', end: '23:59', days: [0, 1, 2, 3, 4, 5, 6] };
-  const now = new Date(2026, 8, 26, 12, 0);
-  const initial = { enabled: true, trades: [], realizedPnl: 0 };
-  const blocked = advancePaperAgent(initial, { signal: 'WATCH BUY', price: 0.9, quoteTime: 1000, symbol: 'AUDCAD', settings, allowEntry: false, now });
-  assert.equal(blocked.position ?? null, null);
-  const open = advancePaperAgent(initial, { signal: 'WATCH BUY', price: 0.9, quoteTime: 2000, symbol: 'AUDCAD', settings, now });
-  const closed = advancePaperAgent(open, { signal: 'WATCH SELL', price: 0.91, quoteTime: 3000, symbol: 'AUDCAD', settings, allowEntry: false, now });
-  assert.equal(closed.position, null);
-  assert.equal(closed.trades[0].status, 'closed');
-});
-
-test('paper agent opens within configured hours, closes on opposite signal and records virtual P&L', () => {
-  const settings = { capital: 10000, maxAllocation: 1000, start: '00:00', end: '23:59', days: [0, 1, 2, 3, 4, 5, 6] };
-  const now = new Date(2026, 8, 26, 12, 0);
-  const initial = { enabled: true, trades: [], realizedPnl: 0 };
-  const opened = advancePaperAgent(initial, { signal: 'WATCH BUY', price: 0.9, quoteTime: 1000, symbol: 'AUDCAD', settings, now });
-  assert.equal(opened.position.side, 'BUY');
-  assert.equal(opened.position.allocation, 1000);
-  const ignoredDuplicate = advancePaperAgent(opened, { signal: 'WATCH BUY', price: 0.91, quoteTime: 1000, symbol: 'AUDCAD', settings, now });
-  assert.equal(ignoredDuplicate, opened);
-  const closed = advancePaperAgent(opened, { signal: 'WATCH SELL', price: 0.91, quoteTime: 2000, symbol: 'AUDCAD', settings, now });
-  assert.equal(closed.position, null);
-  assert.ok(Math.abs(closed.realizedPnl - (1000 / 0.9) * 0.01) < 1e-8);
-  assert.equal(closed.trades[0].status, 'closed');
-});
-
-test('virtual deposits and withdrawals create an auditable local balance ledger', () => {
-  const now = new Date('2026-09-26T12:00:00Z');
-  const initial = { capital: 1000, cashFlows: [], position: { allocation: 200 } };
-  const deposited = adjustVirtualBalance(initial, 1, 250, now);
-  assert.equal(deposited.ok, true);
-  assert.equal(deposited.state.capital, 1250);
-  const withdrawn = adjustVirtualBalance(deposited.state, -1, 300, now);
-  assert.equal(withdrawn.ok, true);
-  assert.equal(withdrawn.state.capital, 950);
-  assert.equal(withdrawn.state.cashFlows.length, 2);
-  assert.equal(adjustVirtualBalance(initial, -1, 900, now).code, 'reserved_funds');
-  assert.equal(adjustVirtualBalance(initial, 1, 0, now).code, 'invalid_amount');
 });
 
 test('chart editors calculate SMA/EMA and pan through the loaded candle history', () => {

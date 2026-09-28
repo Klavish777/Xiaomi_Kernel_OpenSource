@@ -7,7 +7,7 @@ import {
   Brain, Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
   Globe, Bot, Play, Pause, CircleCheck, Settings2,
 } from 'lucide-react';
-import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, findNewerAppRelease, marketTimestampMs, mergeMarketTick, movingAverageValues, normalizeBankOfCanadaReference, sliceChartHistory, summarizeAccountPerformance, summarizePaperHistory, mergeHistoryBars, updateTickCadence, validateReferencePayload } from './agentCore.mjs';
+import { buildAnalystConsensus, findNewerAppRelease, marketTimestampMs, mergeMarketTick, movingAverageValues, normalizeBankOfCanadaReference, sliceChartHistory, summarizeAccountPerformance, mergeHistoryBars, updateTickCadence, validateReferencePayload } from './agentCore.mjs';
 import realisticEarth from './assets/realistic-earth.png';
 import cartoonBrain from './assets/cartoon-brain.png';
 import cartoonMiner from './assets/cartoon-miner.png';
@@ -25,13 +25,11 @@ const copy = {
   en: {
     Overview: 'Overview', Markets: 'Markets', Strategies: 'Strategies', Agents: 'Agents', Positions: 'Positions', History: 'History',
     'Risk controls': 'Risk controls', Reports: 'Reports', Workspace: 'Workspace', 'My workspace': 'My workspace',
-    'Personal account': 'Personal account', 'Good morning, Alex': 'Good morning, Alex',
     'Here’s your trading overview for today.': 'Here’s your trading overview for today.',
-    'Add MT5 account': 'Add MT5 account', 'MT5 READ-ONLY': 'MT5 READ-ONLY', 'PAPER MODE': 'PAPER MODE',
-    'MT5 account equity': 'MT5 account equity', 'Demo balance': 'Demo balance', 'Paper P&L': 'Paper P&L',
+    'Add MT5 account': 'Add MT5 account', 'MT5 READ-ONLY': 'MT5 READ-ONLY', 'NO MT5 ACCOUNT': 'NOT CONNECTED',
     'Demo win rate': 'Demo win rate', 'Demo max drawdown': 'Demo max drawdown',
-    'AI market read': 'AI market read', 'Favorite instruments': 'Favorite instruments', 'Paper trades': 'Paper trades',
-    'Demo positions': 'Demo positions', 'Strategy runner': 'Strategy runner', 'Start paper simulation': 'Start paper simulation',
+    'AI market read': 'AI market read', 'Favorite instruments': 'Favorite instruments',
+    'Demo positions': 'Demo positions', 'Strategy runner': 'Strategy runner',
     'Pause demo': 'Pause demo', 'Connect read-only': 'Connect read-only',
     'MT5 demo account': 'MT5 demo account', 'MT5 live account': 'MT5 live account', 'Language': 'Language',
     'Fullscreen': 'Fullscreen', 'Windowed': 'Windowed', 'DEMO ACCOUNT': 'DEMO ACCOUNT', 'LIVE ACCOUNT': 'LIVE ACCOUNT',
@@ -39,13 +37,11 @@ const copy = {
   ru: {
     Overview: 'Обзор', Markets: 'Рынки', Strategies: 'Стратегии', Agents: 'Агенты', Positions: 'Позиции', History: 'История',
     'Risk controls': 'Контроль риска', Reports: 'Отчёты', Workspace: 'Рабочая область', 'My workspace': 'Моя рабочая область',
-    'Personal account': 'Личный аккаунт', 'Good morning, Alex': 'Доброе утро, Alex',
     'Here’s your trading overview for today.': 'Сводка вашей торговли за сегодня.',
-    'Add MT5 account': 'Добавить счёт MT5', 'MT5 READ-ONLY': 'MT5 · ТОЛЬКО ЧТЕНИЕ', 'PAPER MODE': 'ДЕМО-РЕЖИМ',
-    'MT5 account equity': 'Средства на счёте MT5', 'Demo balance': 'Демо-баланс', 'Paper P&L': 'P&L симуляции',
+    'Add MT5 account': 'Добавить счёт MT5', 'MT5 READ-ONLY': 'MT5 · ТОЛЬКО ЧТЕНИЕ', 'NO MT5 ACCOUNT': 'НЕ ПОДКЛЮЧЕНО',
     'Demo win rate': 'Доля прибыльных демо-сделок', 'Demo max drawdown': 'Максимальная демо-просадка',
-    'AI market read': 'Анализ рынка ИИ', 'Favorite instruments': 'Избранные инструменты', 'Paper trades': 'Симулированные сделки',
-    'Demo positions': 'Демо-позиции', 'Strategy runner': 'Запуск стратегии', 'Start paper simulation': 'Запустить симуляцию',
+    'AI market read': 'Анализ рынка ИИ', 'Favorite instruments': 'Избранные инструменты',
+    'Demo positions': 'Демо-позиции', 'Strategy runner': 'Запуск стратегии',
     'Pause demo': 'Приостановить демо', 'Connect read-only': 'Подключить для чтения',
     'MT5 demo account': 'Демо-счёт MT5', 'MT5 live account': 'Реальный счёт MT5', 'Language': 'Язык',
     'Fullscreen': 'Полный экран', 'Windowed': 'Оконный режим', 'DEMO ACCOUNT': 'ДЕМО-СЧЁТ', 'LIVE ACCOUNT': 'РЕАЛЬНЫЙ СЧЁТ',
@@ -66,8 +62,7 @@ const strategyCatalog = [
   { id: 'carry', group: 'macro', name: 'Carry / swap context', ru: 'Сравнивает ставки переноса брокера; долгосрочный контекст, не внутридневный сигнал.', en: 'Uses broker swap/rollover data as longer-term context, not an intraday signal.', method: 'Swap' },
 ];
 
-const PAPER_STORAGE_KEY = 'money-work-paper-agent-v2';
-const LEGACY_PAPER_STORAGE_KEY = 'money-work-paper-agent-v1';
+const AGENT_SCHEDULE_STORAGE_KEY = 'money-work-mt5-agent-schedule-v1';
 const REFERENCE_STORAGE_KEY = 'money-work-audcad-reference-v1';
 const BROKER_GOAL_STORAGE_KEY = 'money-work-agent-equity-goals-v1';
 const TECHNICAL_AGENT_STORAGE_KEY = 'money-work-technical-agent-enabled-v1';
@@ -83,16 +78,19 @@ function brokerGoalIdentity(account) {
   return account ? `${String(account.login || '')}@${String(account.server || '').trim().toLowerCase()}` : '';
 }
 
-function readPaperAgent() {
-  const defaults = { enabled: false, capital: 1000, maxAllocation: 100, start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5], position: null, trades: [], realizedPnl: 0, cashFlows: [], lastEvaluatedAt: 0, lastAction: '' };
+function readAgentSchedule() {
+  const defaults = { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] };
   try {
-    const current = localStorage.getItem(PAPER_STORAGE_KEY);
-    const saved = JSON.parse(current || localStorage.getItem(LEGACY_PAPER_STORAGE_KEY) || '{}');
-    const migrating = !current;
-    const oldCapital = Number(saved.capital || defaults.capital);
-    const compactCapital = migrating ? Math.min(1000, oldCapital) : Number(saved.capital || defaults.capital);
-    const migrationFlow = migrating && oldCapital !== compactCapital ? [{ id: `migration-${Date.now()}`, type: 'withdrawal', amount: compactCapital - oldCapital, time: new Date().toISOString(), note: 'Compact starting balance' }] : [];
-    return { ...defaults, ...saved, capital: compactCapital, maxAllocation: migrating ? Math.min(100, Number(saved.maxAllocation || defaults.maxAllocation)) : Number(saved.maxAllocation || defaults.maxAllocation), enabled: false, days: Array.isArray(saved.days) ? saved.days.map(Number).filter((day) => day >= 0 && day <= 6) : defaults.days, position: null, trades: Array.isArray(saved.trades) ? saved.trades.slice(0, 50).map((trade) => trade.status === 'open' ? { ...trade, status: 'session stopped' } : trade) : [], cashFlows: [...migrationFlow, ...(Array.isArray(saved.cashFlows) ? saved.cashFlows : [])].slice(0, 50), lastEvaluatedAt: 0 };
+    const savedValue = localStorage.getItem(AGENT_SCHEDULE_STORAGE_KEY)
+      || localStorage.getItem('money-work-paper-agent-v2')
+      || localStorage.getItem('money-work-paper-agent-v1')
+      || '{}';
+    const saved = JSON.parse(savedValue);
+    return {
+      start: /^\d{2}:\d{2}$/.test(saved.start || '') ? saved.start : defaults.start,
+      end: /^\d{2}:\d{2}$/.test(saved.end || '') ? saved.end : defaults.end,
+      days: Array.isArray(saved.days) ? saved.days.map(Number).filter((day) => day >= 0 && day <= 6) : defaults.days,
+    };
   } catch { return defaults; }
 }
 
@@ -187,13 +185,11 @@ function App() {
   const [positions, setPositions] = useState([]);
   const [deals, setDeals] = useState([]);
   const [accountDataLoading, setAccountDataLoading] = useState(false);
-  const [paperAgent, setPaperAgent] = useState(readPaperAgent);
-  const [executionMode, setExecutionMode] = useState('paper');
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [agentSchedule, setAgentSchedule] = useState(readAgentSchedule);
   const [liveTradeConfirmed, setLiveTradeConfirmed] = useState(false);
   const [liveConfirmText, setLiveConfirmText] = useState('');
   const [brokerAgentStatus, setBrokerAgentStatus] = useState(null);
-  const [cashAdjustment, setCashAdjustment] = useState(50);
-  const [cashAdjustmentError, setCashAdjustmentError] = useState('');
   const [referenceData, setReferenceData] = useState(readReference);
   const [technicalAgentEnabled, setTechnicalAgentEnabled] = useState(() => localStorage.getItem(TECHNICAL_AGENT_STORAGE_KEY) !== 'false');
   const [researchRunning, setResearchRunning] = useState(false);
@@ -207,7 +203,7 @@ function App() {
   const lastSeenQuotes = useRef({});
   const tickCadenceSamples = useRef({});
   const updateCheckBusy = useRef(false);
-  const paperLastQuoteTime = useRef(0);
+  const lastAgentQuoteTime = useRef(0);
   const brokerEvaluateBusy = useRef(false);
   const liveQuote = quotes[selectedSymbol];
   const chartHistory = useMemo(() => {
@@ -288,7 +284,7 @@ function App() {
           window.moneyWork.getMt5Positions(),
         ]);
         let nextDeals;
-        if (Date.now() - lastDealsSync >= 5000) {
+        if (Date.now() - lastDealsSync >= 1000) {
           lastDealsSync = Date.now();
           try { nextDeals = await window.moneyWork.getMt5Deals(30); }
           catch (error) { if (active) setMt5Error((current) => current || error.message); }
@@ -305,7 +301,7 @@ function App() {
       }
     };
     refreshAccountData();
-    const timer = setInterval(refreshAccountData, 1000);
+    const timer = setInterval(refreshAccountData, 100);
     return () => { active = false; clearInterval(timer); };
   }, [accountIdentity]);
 
@@ -425,16 +421,12 @@ function App() {
     const signal = trend === 'Bullish' && rsi < 70 ? 'WATCH BUY' : trend === 'Bearish' && rsi > 30 ? 'WATCH SELL' : 'WAIT';
     return { rsi, trend, signal, price: closes.at(-1), source: 'MT5 historical bars' };
   }, [liveBars, liveQuote]);
-  const analystConsensus = useMemo(() => {
-    const paperHistory = summarizePaperHistory(paperAgent.trades);
-    const learningStatus = executionMode === 'paper' ? paperHistory : brokerAgentStatus;
-    return buildAnalystConsensus({
+  const analystConsensus = useMemo(() => buildAnalystConsensus({
       analysis: technicalAgentEnabled ? analysis : null,
       quote: liveQuote,
       referenceData: researchRunning ? referenceData : null,
-      brokerStatus: learningStatus,
-    });
-  }, [analysis, liveQuote, referenceData, brokerAgentStatus, paperAgent.trades, executionMode, technicalAgentEnabled, researchRunning]);
+      brokerStatus: brokerAgentStatus,
+    }), [analysis, liveQuote, referenceData, brokerAgentStatus, technicalAgentEnabled, researchRunning]);
 
   async function fetchDailyReference(url, normalize = (payload) => payload) {
     const controller = new AbortController();
@@ -548,77 +540,68 @@ function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(PAPER_STORAGE_KEY, JSON.stringify({ ...paperAgent, enabled: false, position: null, lastEvaluatedAt: 0 }));
-    } catch { /* local browser storage can be unavailable */ }
-  }, [paperAgent]);
+      localStorage.removeItem('money-work-paper-agent-v1');
+      localStorage.removeItem('money-work-paper-agent-v2');
+    } catch { /* persistent browser storage may be unavailable */ }
+  }, []);
 
   useEffect(() => {
-    if (!paperAgent.enabled || !liveQuote || !analysis) return;
-    const price = (Number(liveQuote.bid) + Number(liveQuote.ask)) / 2;
+    try { localStorage.setItem(AGENT_SCHEDULE_STORAGE_KEY, JSON.stringify(agentSchedule)); } catch { /* persistent browser storage may be unavailable */ }
+  }, [agentSchedule]);
+
+  useEffect(() => {
+    if (!agentEnabled || !mt5Account || !window.moneyWork || !liveQuote || !analysis || brokerGoalReached) return;
+    if (mt5Account.accountType === 'real' && !liveTradeConfirmed) return;
     const quoteTime = marketTimestampMs(liveQuote);
-    if (!quoteTime || quoteTime - paperLastQuoteTime.current < 2000) return;
-    paperLastQuoteTime.current = quoteTime;
-    if (executionMode === 'mt5') {
-      if (!window.moneyWork || !mt5Account || brokerEvaluateBusy.current) return;
-      if (mt5Account.accountType === 'real' && !liveTradeConfirmed) return;
-      brokerEvaluateBusy.current = true;
-      window.moneyWork.evaluateMt5Agent({
-        symbol: selectedSymbol,
-        signal: analysis.signal,
-        rsi: analysis.rsi,
-        entryAllowed: analystConsensus.entryAllowed,
-        liveConfirmed: liveTradeConfirmed,
-        schedule: { start: paperAgent.start, end: paperAgent.end, days: paperAgent.days },
-        reference: researchRunning ? referenceData : null,
-      }).then((result) => {
-        const consensus = buildAnalystConsensus({
-          analysis: technicalAgentEnabled ? analysis : null,
-          quote: liveQuote,
-          referenceData: researchRunning ? referenceData : null,
-          brokerStatus: result,
-        });
-        setBrokerAgentStatus({ ...result, consensus });
-        if (['position_opened', 'position_closed', 'profit_target_closed', 'daily_loss_stop', 'capital_goal_reached'].includes(result.state)) {
-          refreshPositionsNow();
-          refreshDealsNow();
-        }
-        if (result.state === 'capital_goal_reached' && brokerGoalKey) {
-          setBrokerGoalMap((current) => {
-            const next = { ...current, [brokerGoalKey]: true };
-            try { localStorage.setItem(BROKER_GOAL_STORAGE_KEY, JSON.stringify(next)); } catch { /* persistent browser storage may be unavailable */ }
-            return next;
-          });
-        }
-        if (['daily_loss_stop', 'capital_goal_reached'].includes(result.state)) {
-          setPaperAgent((current) => ({ ...current, enabled: false }));
-          setLiveTradeConfirmed(false);
-        }
-      }).catch((error) => {
-        const rawMessage = String(error?.message || error || 'MT5 agent request failed.');
-        const algoTradingDisabled = /(?:algorithmic|algo) trading.*disabled|disabled.*(?:algorithmic|algo) trading|tradeapi_disabled/i.test(rawMessage);
-        const message = algoTradingDisabled
-          ? l(
-            'MT5 запретил внешнюю автоторговлю. В том же терминале включите кнопку Algo Trading; откройте Сервис → Настройки → Советники, включите «Разрешить алгоритмическую торговлю» и снимите флажок «Отключить автоторговлю через внешний Python API». Проверьте, что в MT5 выполнен вход в DEMO с торговым, а не investor-паролем. Затем переподключите счёт в Money Work и запустите агента снова.',
-            'MT5 has blocked algorithmic trading. In the same terminal, enable the Algo Trading toolbar button; open Tools → Options → Expert Advisors, enable “Allow algorithmic trading” and uncheck “Disable automated trading via external Python API”. Confirm that MT5 is logged into the DEMO account with a trading-enabled password, not an investor/read-only password. Then reconnect the account in Money Work and start the agent again.',
-          )
-          : rawMessage;
-        setBrokerAgentStatus({ state: algoTradingDisabled ? 'terminal_trading_disabled' : 'error', message });
-        setMt5Error(message);
-        setPaperAgent((current) => ({ ...current, enabled: false }));
-        setLiveTradeConfirmed(false);
-      }).finally(() => { brokerEvaluateBusy.current = false; });
-      return;
-    }
-    const next = advancePaperAgent(paperAgent, {
-      signal: analysis.signal,
-      price,
-      quoteTime,
+    if (!quoteTime || quoteTime - lastAgentQuoteTime.current < 2000 || brokerEvaluateBusy.current) return;
+    lastAgentQuoteTime.current = quoteTime;
+    brokerEvaluateBusy.current = true;
+    window.moneyWork.evaluateMt5Agent({
       symbol: selectedSymbol,
-      settings: { ...paperAgent, capital: Number(paperAgent.capital) + Number(paperAgent.realizedPnl || 0) },
-      allowEntry: analystConsensus.entryAllowed,
-    });
-    if (next !== paperAgent) setPaperAgent(next);
-  }, [paperAgent, liveQuote, analysis, selectedSymbol, executionMode, liveTradeConfirmed, mt5Account, brokerGoalKey, referenceData, analystConsensus]);
+      signal: analysis.signal,
+      rsi: analysis.rsi,
+      entryAllowed: analystConsensus.entryAllowed,
+      liveConfirmed: liveTradeConfirmed,
+      schedule: agentSchedule,
+      reference: researchRunning ? referenceData : null,
+    }).then((result) => {
+      const consensus = buildAnalystConsensus({
+        analysis: technicalAgentEnabled ? analysis : null,
+        quote: liveQuote,
+        referenceData: researchRunning ? referenceData : null,
+        brokerStatus: result,
+      });
+      setBrokerAgentStatus({ ...result, consensus });
+      if (['position_opened', 'position_closed', 'profit_target_closed', 'daily_loss_stop', 'capital_goal_reached'].includes(result.state)) {
+        refreshPositionsNow();
+        refreshDealsNow();
+      }
+      if (result.state === 'capital_goal_reached' && brokerGoalKey) {
+        setBrokerGoalMap((current) => {
+          const next = { ...current, [brokerGoalKey]: true };
+          try { localStorage.setItem(BROKER_GOAL_STORAGE_KEY, JSON.stringify(next)); } catch { /* persistent browser storage may be unavailable */ }
+          return next;
+        });
+      }
+      if (['daily_loss_stop', 'capital_goal_reached'].includes(result.state)) {
+        setAgentEnabled(false);
+        setLiveTradeConfirmed(false);
+      }
+    }).catch((error) => {
+      const rawMessage = String(error?.message || error || 'MT5 agent request failed.');
+      const algoTradingDisabled = /(?:algorithmic|algo) trading.*disabled|disabled.*(?:algorithmic|algo) trading|tradeapi_disabled/i.test(rawMessage);
+      const message = algoTradingDisabled
+        ? l(
+          'MT5 запретил внешнюю автоторговлю. В том же терминале включите кнопку Algo Trading; откройте Сервис → Настройки → Советники, включите «Разрешить алгоритмическую торговлю» и снимите флажок «Отключить автоторговлю через внешний Python API». Убедитесь, что введён торговый, а не investor-пароль. Затем переподключите счёт в Money Work и запустите агента снова.',
+          'MT5 has blocked algorithmic trading. In the same terminal, enable the Algo Trading toolbar button; open Tools → Options → Expert Advisors, enable “Allow algorithmic trading” and uncheck “Disable automated trading via external Python API”. Confirm you entered a trading-enabled password, not an investor/read-only password. Then reconnect the account in Money Work and start the agent again.',
+        )
+        : rawMessage;
+      setBrokerAgentStatus({ state: algoTradingDisabled ? 'terminal_trading_disabled' : 'error', message });
+      setMt5Error(message);
+      setAgentEnabled(false);
+      setLiveTradeConfirmed(false);
+    }).finally(() => { brokerEvaluateBusy.current = false; });
+  }, [agentEnabled, agentSchedule, liveQuote, analysis, selectedSymbol, liveTradeConfirmed, mt5Account, brokerGoalKey, brokerGoalReached, referenceData, analystConsensus, researchRunning, technicalAgentEnabled]);
 
   async function refreshPositionsNow() {
     if (!window.moneyWork || !mt5Account) return;
@@ -666,10 +649,9 @@ function App() {
     try {
       const account = await window.moneyWork.connectMt5({ ...accountForm, remember: rememberAccount });
       setMt5Account(account);
-      setExecutionMode('paper');
+      setAgentEnabled(false);
       setLiveTradeConfirmed(false);
       setBrokerAgentStatus(null);
-      setPaperAgent((current) => ({ ...current, enabled: false }));
       rememberServer(account.server);
       if (rememberAccount) setSavedAccount({ login: account.login, server: account.server, terminalPath: accountForm.terminalPath });
       setModal('');
@@ -692,10 +674,9 @@ function App() {
     try {
       const account = await window.moneyWork.connectSavedMt5();
       setMt5Account(account);
-      setExecutionMode('paper');
+      setAgentEnabled(false);
       setLiveTradeConfirmed(false);
       setBrokerAgentStatus(null);
-      setPaperAgent((current) => ({ ...current, enabled: false }));
       rememberServer(account.server);
       setModal('');
       const names = await window.moneyWork.searchMt5Symbols('');
@@ -715,13 +696,12 @@ function App() {
       if (window.moneyWork) await window.moneyWork.disconnectMt5();
       setMt5Account(null);
       setQuotes({});
+      setAgentEnabled(false);
       setQuoteCadenceBySymbol({});
       lastSeenQuotes.current = {};
       tickCadenceSamples.current = {};
       setSelectedSymbol('AUDCAD');
       setLiveTradeConfirmed(false);
-      setExecutionMode('paper');
-      setPaperAgent((current) => ({ ...current, enabled: false }));
       setModal('');
     } catch (error) {
       setMt5Error(error.message);
@@ -729,57 +709,36 @@ function App() {
   }
 
   function startOrPauseAgent() {
-    if (paperAgent.enabled) {
-      setPaperAgent((current) => ({ ...current, enabled: false }));
-      if (executionMode === 'mt5' && mt5Account?.accountType === 'real') setLiveTradeConfirmed(false);
+    if (agentEnabled) {
+      setAgentEnabled(false);
+      if (mt5Account?.accountType === 'real') setLiveTradeConfirmed(false);
       return;
     }
-    if (executionMode === 'paper' && (paperAgent.goalReached || Number(paperAgent.capital) + Number(paperAgent.realizedPnl || 0) >= MAX_AGENT_EQUITY)) {
-      setPaperAgent((current) => ({ ...current, enabled: false, goalReached: true }));
-      setMt5Error(l(`Paper-агент остановлен: достигнут предел виртуального капитала ${MAX_AGENT_EQUITY.toLocaleString()} CAD.`, `Paper agent stopped at the ${MAX_AGENT_EQUITY.toLocaleString()} CAD virtual-equity cap.`));
+    if (!mt5Account || !['demo', 'real'].includes(mt5Account.accountType)) {
+      setMt5Error(l('Сначала подключите торговый счёт MT5. Для безопасной проверки используйте брокерский MT5 Demo.', 'Connect an MT5 trading account first. Use your broker MT5 Demo account for testing.'));
+      setModal('connect');
       return;
     }
-    if (executionMode === 'mt5' && brokerGoalReached) {
+    if (brokerGoalReached) {
       setMt5Error(l('Агент этого MT5-счёта остановлен после достижения предела баланса/эквити; повторный запуск заблокирован.', 'This MT5 account agent is latched off after reaching its balance/equity cap; restart is blocked.'));
       return;
     }
-    if (executionMode === 'mt5') {
-      if (!mt5Account || !['demo', 'real'].includes(mt5Account.accountType)) {
-        setMt5Error('Connect a verified MT5 demo or live account before enabling broker execution.');
-        return;
-      }
-      if (mt5Account.accountType === 'real' && !liveTradeConfirmed) {
-        setLiveConfirmText('');
-        setModal('live-trading-confirmation');
-        return;
-      }
+    if (mt5Account.accountType === 'real' && !liveTradeConfirmed) {
+      setLiveConfirmText('');
+      setModal('live-trading-confirmation');
+      return;
     }
     setMt5Error('');
     setResearchRunning(true);
-    setPaperAgent((current) => ({ ...current, enabled: true }));
+    setAgentEnabled(true);
   }
 
   function confirmLiveAgent() {
     if (liveConfirmText.trim() !== 'LIVE') return;
     setLiveTradeConfirmed(true);
     setResearchRunning(true);
-    setPaperAgent((current) => ({ ...current, enabled: true }));
+    setAgentEnabled(true);
     setModal('');
-  }
-
-  function adjustPaperBalance(direction) {
-    setCashAdjustmentError('');
-    const result = adjustVirtualBalance(paperAgent, direction, cashAdjustment);
-    if (!result.ok) {
-      const errors = {
-        invalid_amount: l('Введите сумму от 0,01 до 1 000 000 CAD.', 'Enter an amount from 0.01 to 1,000,000 CAD.'),
-        reserved_funds: l('Нельзя снять сумму, зарезервированную открытой симуляцией.', 'Cannot withdraw funds reserved by an open paper position.'),
-        balance_limit: l('Виртуальный баланс не должен превышать 80 000 000 CAD.', 'Virtual balance cannot exceed 80,000,000 CAD.'),
-      };
-      setCashAdjustmentError(errors[result.code] || l('Операция отклонена.', 'Adjustment rejected.'));
-      return;
-    }
-    setPaperAgent(result.state);
   }
 
   function shiftChart(offsetDelta) {
@@ -819,7 +778,7 @@ function App() {
 
         <div className="workspace-switcher">
           <div className="workspace-avatar">MW</div>
-          <div className="workspace-copy"><strong>{t('My workspace')}</strong><span>{t('Personal account')}</span></div>
+          <div className="workspace-copy"><strong>{t('My workspace')}</strong><span>{l('Счёт MT5', 'MT5 account')}</span></div>
           <ChevronDown size={15} className="muted-icon" />
         </div>
 
@@ -844,9 +803,9 @@ function App() {
             <div><strong>Need a hand?</strong><span>Visit the quick guide</span></div>
             <ArrowUpRight size={14} className="help-arrow" />
           </div>
-          <button className="profile-row" onClick={() => setModal('profile')}>
-            <div className="profile-avatar">A</div>
-            <div className="profile-copy"><strong>Alex Morgan</strong><span>Demo profile</span></div>
+          <button className="profile-row" onClick={() => setModal('connect')}>
+            <div className="profile-avatar">MT</div>
+            <div className="profile-copy"><strong>{mt5Account?.login || l('Счёт MT5', 'MT5 account')}</strong><span>{mt5Account?.server || l('Не подключён', 'Not connected')}</span></div>
             <MoreHorizontal size={18} className="muted-icon" />
           </button>
         </div>
@@ -856,14 +815,14 @@ function App() {
         <header className="topbar">
           <div className="breadcrumbs"><span>{t('Workspace')}</span><span className="crumb-slash">/</span><strong>{t(activeNav)}</strong></div>
           <div className="topbar-actions">
-            <div className={`environment-pill ${mt5Account ? 'connected' : ''}`}><span className="pulse-dot" /> {mt5Account ? (mt5Account.accountType === 'demo' ? t('DEMO ACCOUNT') : t('LIVE ACCOUNT')) : t('PAPER MODE')}</div>
+            <div className={`environment-pill ${mt5Account ? 'connected' : ''}`}><span className="pulse-dot" /> {mt5Account ? (mt5Account.accountType === 'demo' ? t('DEMO ACCOUNT') : t('LIVE ACCOUNT')) : t('NO MT5 ACCOUNT')}</div>
             <button className="connect-button" onClick={() => { setMt5Error(''); setModal('connect'); }}>
               {mt5Account ? <><Activity size={15} /> {mt5Account.server}</> : <><Plus size={15} /> {t('Add MT5 account')}</>}
             </button>
             <button className="top-icon" aria-label="Search"><Search size={17} /></button>
             <button className={`top-icon notification-button ${availableUpdate ? 'update-available' : ''}`} onClick={() => availableUpdate ? openAppRelease(availableUpdate.version) : checkForAppUpdate(true)} title={availableUpdate ? l(`Скачать обновление v${availableUpdate.version}`, `Download update v${availableUpdate.version}`) : l('Проверить обновления', 'Check for updates')} aria-label={availableUpdate ? l(`Доступно обновление v${availableUpdate.version}`, `Update v${availableUpdate.version} available`) : l('Проверить обновления', 'Check for updates')} disabled={updateCheckStatus === 'checking'}><Bell size={17} />{availableUpdate && <i />}</button>
             <label className="language-control" title={t('Language')}><Languages size={14} /><select aria-label={t('Language')} value={language} onChange={(event) => setLanguage(event.target.value)}><option value="ru">RU</option><option value="en">EN</option></select></label><button className="top-icon fullscreen-button" onClick={async () => { if (window.moneyWork) setFullScreen(await window.moneyWork.toggleFullscreen()); }} title={fullScreen ? t('Windowed') : t('Fullscreen')} aria-label={fullScreen ? t('Windowed') : t('Fullscreen')}><Maximize2 size={16} /></button><div className="top-divider" />
-            <div className="top-user-avatar">AM</div>
+            <div className="top-user-avatar">MT</div>
           </div>
         </header>
 
@@ -894,15 +853,15 @@ function App() {
                 <div className="overview-agent-heading"><div><span className="section-kicker">{l('ИНТЕРНЕТ-АГЕНТ', 'INTERNET AGENT')}</span><strong>{l('Дневной ориентир · AUD/CAD', 'Daily reference · AUD/CAD')}</strong></div><div className="center-agent-controls"><span className={`agent-state-label ${researchRunning ? 'state-on' : ''}`}><i />{researchRunning ? (researchLoading ? l('ПРОВЕРЯЕТ', 'CHECKING') : l('АКТИВЕН', 'ACTIVE')) : l('ПАУЗА', 'PAUSED')}</span><button className="agent-settings-button" type="button" onClick={() => setActiveNav('Agents')} title={l('Настройки агента', 'Agent settings')} aria-label={l('Настройки интернет-агента', 'Internet agent settings')}><Settings2 size={16} /></button></div></div>
                 <button className={`earth-balance-button ${researchRunning ? 'is-on' : ''}`} type="button" aria-pressed={researchRunning} aria-label={researchRunning ? l('Выключить интернет-агента', 'Turn off internet agent') : l('Включить интернет-агента', 'Turn on internet agent')} onClick={() => setResearchRunning((running) => !running)} title={researchRunning ? l('Приостановить интернет-агента', 'Pause internet agent') : l('Включить интернет-агента', 'Enable internet agent')}>
                   <img className="realistic-earth-image" src={realisticEarth} alt="" />
-                  <span className="earth-balance-copy"><small>{executionMode === 'paper' ? l('ВИРТУАЛЬНЫЙ БАЛАНС', 'PAPER BALANCE') : l('БАЛАНС СЧЁТА', 'ACCOUNT BALANCE')}</small><strong>{executionMode === 'paper' ? `${(Number(paperAgent.capital) + Number(paperAgent.realizedPnl || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} CAD` : mt5Account ? `${mt5Account.currency} ${Number(mt5Account.balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</strong><small>{referenceData ? `${l('AUD/CAD', 'AUD/CAD')} · ${Number(referenceData.rate).toFixed(5)}` : l('Баланс по центру', 'Balance overview')}</small></span>
+                  <span className="earth-balance-copy"><small>{l('БАЛАНС СЧЁТА MT5', 'MT5 ACCOUNT BALANCE')}</small><strong>{mt5Account ? `${mt5Account.currency} ${Number(mt5Account.balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</strong><small>{referenceData ? `${l('AUD/CAD', 'AUD/CAD')} · ${Number(referenceData.rate).toFixed(5)}` : l('Подключите MT5 Demo или Live', 'Connect MT5 Demo or Live')}</small></span>
                 </button>
-                <div className="overview-agent-footer center-agent-footer"><span>{researchRunning ? l('Ориентир обновляется раз в 6 часов; анализ — на каждом новом тике MT5', 'Reference refreshes every 6h; analysis recalculates on each new MT5 tick') : l('Нажмите Землю для запуска проверки', 'Tap Earth to start reference checks')}</span><small>{mt5Account ? `${mt5Account.login} · ${mt5Account.currency}` : l('Paper · CAD', 'Paper · CAD')}</small></div>
+                <div className="overview-agent-footer center-agent-footer"><span>{researchRunning ? l('Ориентир обновляется раз в 6 часов; анализ — на каждом новом тике MT5', 'Reference refreshes every 6h; analysis recalculates on each new MT5 tick') : l('Нажмите Землю для запуска проверки', 'Tap Earth to start reference checks')}</span><small>{mt5Account ? `${mt5Account.login} · ${mt5Account.currency}` : l('Счёт не подключён', 'No account connected')}</small></div>
               </article>
 
-              <article className={`overview-agent-tile miner-agent-tile ${paperAgent.enabled ? 'agent-is-on' : ''}`}>
-                <div className="overview-agent-heading"><div><span className="section-kicker">{l('АГЕНТ ИСПОЛНЕНИЯ', 'EXECUTION AGENT')}</span><strong>{executionMode === 'paper' ? l('Автопилот Paper', 'Paper autopilot') : l('Автопилот MT5', 'MT5 autopilot')}</strong></div><button className="agent-settings-button" type="button" onClick={() => setActiveNav('Agents')} title={l('Настройки агента', 'Agent settings')} aria-label={l('Настройки торгового агента', 'Trading agent settings')}><Settings2 size={16} /></button></div>
-                <button className={`mascot-toggle miner-toggle ${paperAgent.enabled ? 'is-on' : ''}`} type="button" aria-pressed={paperAgent.enabled} aria-label={paperAgent.enabled ? l('Выключить торгового агента', 'Turn off trading agent') : l('Включить торгового агента', 'Turn on trading agent')} onClick={startOrPauseAgent} title={paperAgent.enabled ? l('Остановить торгового агента', 'Pause trading agent') : l('Включить торгового агента', 'Enable trading agent')}><img src={cartoonMiner} alt="" /></button>
-                <div className="overview-agent-footer"><span className={`agent-state-label ${paperAgent.enabled ? 'state-on' : ''}`}><i />{paperAgent.enabled ? l('АГЕНТ АКТИВЕН', 'AGENT ON') : brokerGoalReached ? l('ЦЕЛЬ ДОСТИГНУТА', 'GOAL REACHED') : l('ПАУЗА', 'PAUSED')}</span><small>{paperAgent.enabled ? l('Работает в пределах лимитов', 'Running within risk limits') : l('Нажмите значок для запуска', 'Tap the mascot to start')}</small></div>
+              <article className={`overview-agent-tile miner-agent-tile ${agentEnabled ? 'agent-is-on' : ''}`}>
+                <div className="overview-agent-heading"><div><span className="section-kicker">{l('АГЕНТ ИСПОЛНЕНИЯ', 'EXECUTION AGENT')}</span><strong>{l('Автопилот MT5', 'MT5 autopilot')}</strong></div><button className="agent-settings-button" type="button" onClick={() => setActiveNav('Agents')} title={l('Настройки агента', 'Agent settings')} aria-label={l('Настройки торгового агента', 'Trading agent settings')}><Settings2 size={16} /></button></div>
+                <button className={`mascot-toggle miner-toggle ${agentEnabled ? 'is-on' : ''}`} type="button" aria-pressed={agentEnabled} aria-label={agentEnabled ? l('Выключить торгового агента', 'Turn off trading agent') : l('Включить торгового агента', 'Turn on trading agent')} onClick={startOrPauseAgent} title={agentEnabled ? l('Остановить торгового агента', 'Pause trading agent') : l('Включить торгового агента', 'Enable trading agent')}><img src={cartoonMiner} alt="" /></button>
+                <div className="overview-agent-footer"><span className={`agent-state-label ${agentEnabled ? 'state-on' : ''}`}><i />{agentEnabled ? l('АГЕНТ АКТИВЕН', 'AGENT ON') : brokerGoalReached ? l('ЦЕЛЬ ДОСТИГНУТА', 'GOAL REACHED') : l('ПАУЗА', 'PAUSED')}</span><small>{agentEnabled ? l('Работает в пределах лимитов', 'Running within risk limits') : l('Нажмите значок для запуска', 'Tap the mascot to start')}</small></div>
               </article>
             </section>
             <article className="panel chart-panel dashboard-chart">
@@ -920,7 +879,7 @@ function App() {
           </section>}
 
           {activeNav === 'Agents' && <section className="page-section agents-page">
-            <div className="section-page-heading"><div><span className="section-kicker">{l('РАБОЧАЯ ПАНЕЛЬ АГЕНТОВ', 'AGENT CONTROL DESK')}</span><h1>{l('Автоторговля AUD/CAD', 'AUD/CAD auto trader')}</h1><p>{l('Режим Paper, MT5 Demo и MT5 Live. Анализ реагирует на новые тики MT5; результативность не гарантируется.', 'Paper, MT5 Demo and MT5 Live modes. Local analysis follows new MT5 ticks; profitability is not guaranteed.')}</p></div></div>
+            <div className="section-page-heading"><div><span className="section-kicker">{l('ПАНЕЛЬ УПРАВЛЕНИЯ MT5', 'MT5 CONTROL DESK')}</span><h1>{l('Автоматическая торговля AUD/CAD', 'AUD/CAD MT5 auto trader')}</h1><p>{l('Подключите брокерский MT5 Demo для проверки или MT5 Live. Новые сигналы и ордера ограничены риск-контролями.', 'Connect a broker MT5 Demo account for testing or MT5 Live. Signals and orders remain risk-controlled; profitability is not guaranteed.')}</p></div></div>
             <div className="agent-control-grid">
               <article className="panel agent-control-card internet-control-card">
                 <div className="agent-control-heading"><div><span className="section-kicker"><Globe size={14} /> {l('АГЕНТ СБОРА ДАННЫХ', 'INTERNET DATA AGENT')}</span><h2>{l('Публичный ориентир AUD/CAD', 'Public AUD/CAD reference')}</h2></div><span className={`status-badge ${researchRunning ? '' : 'muted'}`}>{researchLoading ? l('СКАНИРОВАНИЕ', 'SCANNING') : researchRunning ? l('РАБОТАЕТ', 'RUNNING') : l('ПАУЗА', 'PAUSED')}</span></div>
@@ -932,39 +891,27 @@ function App() {
                 <div className="agent-actions"><button className="modal-primary" onClick={runInternetResearch} disabled={researchLoading}><RefreshCw size={14} /> {researchLoading ? l('Сканирование…', 'Scanning…') : l('Проверить сейчас', 'Check now')}</button><button className="secondary-action" onClick={() => setResearchRunning((running) => !running)}>{researchRunning ? <Pause size={14} /> : <Play size={14} />}{researchRunning ? l('Остановить цикл', 'Pause schedule') : l('Запуск · раз в 6 ч', 'Start · every 6h')}</button></div>
                 <p className="muted-copy">{l('Три проверки применяются к каждому ответу. Публичный источник обновляет дневной курс, поэтому опрос каждые 0,01 секунды не создаёт новых данных; технический анализ пересчитывается на каждом новом тике MT5.', 'Three checks validate each response. The public source publishes a daily rate, so polling it every 0.01 seconds would not create new data; technical analysis recalculates on each new MT5 tick.')}</p>
               </article>
-
-              <article className="panel agent-control-card paper-control-card compact-agent-card">
-                <div className="agent-control-heading"><div><span className="section-kicker"><MinerIcon small /> {l('АВТОМАТИЧЕСКИЙ АГЕНТ · AUDCAD', 'AUTOMATED AGENT · AUDCAD')}</span><h2>{executionMode === 'paper' ? l('Paper-симуляция', 'Paper simulation') : mt5Account?.accountType === 'real' ? l('Исполнение MT5 Live', 'MT5 Live execution') : l('Исполнение MT5 Demo', 'MT5 Demo execution')}</h2></div><span className={`status-badge ${paperAgent.enabled ? (executionMode === 'mt5' && mt5Account?.accountType === 'real' ? 'live-risk-badge' : '') : 'muted'}`}>{paperAgent.enabled ? l('РАБОТАЕТ', 'RUNNING') : l('ПАУЗА', 'PAUSED')}</span></div>
-                <div className="execution-mode-picker"><button className={executionMode === 'paper' ? 'selected' : ''} onClick={() => { setExecutionMode('paper'); setLiveTradeConfirmed(false); }} disabled={paperAgent.enabled}>{l('Paper', 'Paper')}</button><button className={executionMode === 'mt5' ? 'selected' : ''} onClick={() => { setExecutionMode('mt5'); setLiveTradeConfirmed(false); }} disabled={paperAgent.enabled || !mt5Account || !['demo', 'real'].includes(mt5Account.accountType)}>{mt5Account?.accountType === 'real' ? 'MT5 LIVE' : mt5Account?.accountType === 'demo' ? 'MT5 DEMO' : 'MT5'}</button></div>
-                <div className={`paper-warning ${executionMode === 'mt5' && mt5Account?.accountType === 'real' ? 'live-warning' : ''}`}><ShieldCheck size={15} /><span>{executionMode === 'paper' ? l('PAPER: виртуальные сделки. Агент остановится при виртуальном капитале 80 млн CAD. Пополнения/снятия — только локальные.', 'PAPER: virtual trades only. Agent stops at 80 million CAD virtual equity. Cash adjustments are local only.') : mt5Account?.accountType === 'real' ? l('LIVE: реальные ордера возможны. Лимиты: ≤0,01 лота, фиксация от 0,30 валюты счёта на 0,01 лота, SL 20 / TP 30 пипсов, остановка при балансе или эквити 80 млн валюты счёта и дневной стоп 1%.', 'LIVE: real orders can be placed. Caps: ≤0.01 lot; cash-profit close from 0.30 account-currency units per 0.01 lot; stop when balance or equity reaches 80 million account-currency units; SL 20 / TP 30 pips; 1% daily stop.') : l('DEMO: ордера будут отправлены на учебный MT5-счёт. Лимиты: ≤0,01 лота, фиксация от 0,30 валюты счёта на 0,01 лота, SL 20 / TP 30 пипсов, остановка при балансе или эквити 80 млн валюты счёта и дневной стоп 1%.', 'DEMO: orders go to the MT5 demo account. Caps: ≤0.01 lot; cash-profit close from 0.30 account-currency units per 0.01 lot; stop when balance or equity reaches 80 million account-currency units; SL 20 / TP 30 pips; 1% daily stop.')}</span></div>
-                {executionMode === 'paper' ? <>
-                  <div className="paper-config-grid compact-paper-fields">
-                    <label>{l('Виртуальный баланс · CAD', 'Virtual balance · CAD')}<input type="number" min="1" max={MAX_AGENT_EQUITY} step="50" value={paperAgent.capital} onChange={(event) => setPaperAgent((current) => ({ ...current, capital: Math.min(MAX_AGENT_EQUITY, Math.max(1, Number(event.target.value) || 1)) }))} /></label>
-                    <label>{l('Лимит на сделку · CAD', 'Per-trade cap · CAD')}<input type="number" min="1" max="10000000" step="25" value={paperAgent.maxAllocation} onChange={(event) => setPaperAgent((current) => ({ ...current, maxAllocation: Math.min(10000000, Math.max(1, Number(event.target.value) || 1)) }))} /></label>
-                    <label>{l('Сумма изменения', 'Adjustment amount')}<input type="number" min="0.01" max="1000000" step="10" value={cashAdjustment} onChange={(event) => setCashAdjustment(Number(event.target.value))} /></label>
-                  </div>
-                  <div className="cash-actions"><button className="secondary-action" onClick={() => adjustPaperBalance(1)}>{l('＋ Пополнить paper', '＋ Add paper funds')}</button><button className="secondary-action" onClick={() => adjustPaperBalance(-1)}>{l('－ Снять paper', '－ Withdraw paper')}</button><span>{l('Остаток', 'Balance')}: <b>{(Number(paperAgent.capital) + Number(paperAgent.realizedPnl || 0)).toFixed(2)} CAD</b></span></div>
-                  {cashAdjustmentError && <div className="connection-error compact-error">{cashAdjustmentError}</div>}
-                </> : <div className="live-account-summary"><span>{l('Баланс MT5', 'MT5 balance')} <b>{mt5Account ? `${mt5Account.currency} ${Number(mt5Account.balance).toFixed(2)}` : '—'}</b></span><span>{l('Снятие/пополнение реального счёта выполняется только у брокера.', 'Real account deposits/withdrawals are handled by the broker.')}</span></div>}
-                <div className="schedule-inline"><label>{l('С', 'From')}<input type="time" value={paperAgent.start} onChange={(event) => setPaperAgent((current) => ({ ...current, start: event.target.value }))} /></label><label>{l('До', 'To')}<input type="time" value={paperAgent.end} onChange={(event) => setPaperAgent((current) => ({ ...current, end: event.target.value }))} /></label><div className="weekday-picker compact-weekdays"><span>{l('Дни ·', 'Days ·')} {Intl.DateTimeFormat().resolvedOptions().timeZone}</span><div>{(language === 'ru' ? ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] : ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']).map((label, day) => <button key={day} type="button" className={paperAgent.days.includes(day) ? 'selected' : ''} aria-pressed={paperAgent.days.includes(day)} onClick={() => setPaperAgent((current) => ({ ...current, days: current.days.includes(day) ? current.days.filter((item) => item !== day) : [...current.days, day].sort() }))}>{label}</button>)}</div></div></div>
-                {paperAgent.start === paperAgent.end && <small className="schedule-note">{l('Одинаковое время означает весь выбранный день.', 'Matching start/end times mean all day on selected weekdays.')}</small>}
-                <div className="paper-performance-grid compact-performance"><div><small>{executionMode === 'paper' ? l('P&L paper', 'Paper P&L') : l('P&L агента сегодня', 'Agent P&L today')}</small><strong className={Number(brokerAgentStatus?.dailyPnl ?? paperAgent.realizedPnl) >= 0 ? 'positive-text' : 'negative-text'}>{executionMode === 'paper' ? `${Number(paperAgent.realizedPnl || 0).toFixed(2)} CAD` : brokerAgentStatus?.dailyPnl !== undefined ? `${Number(brokerAgentStatus.dailyPnl).toFixed(2)} ${mt5Account?.currency || ''}` : '—'}</strong></div><div><small>{l('Сигнал', 'Signal')}</small><strong>{analysis?.signal || l('Нет данных', 'No data')}</strong></div><div><small>{executionMode === 'paper' ? l('Виртуальная позиция', 'Paper position') : l('Состояние агента', 'Agent status')}</small><strong>{executionMode === 'paper' ? (paperAgent.goalReached ? l('Лимит достигнут · остановлен', 'Cap reached · stopped') : paperAgent.position ? `${paperAgent.position.side} AUDCAD` : l('Нет', 'None')) : brokerGoalReached ? l('Лимит 80 млн достигнут', '80M cap reached') : (brokerAgentStatus?.state || l('Ожидание', 'Waiting'))}</strong></div></div>
+              <article className="panel agent-control-card mt5-agent-control-card compact-agent-card">
+                <div className="agent-control-heading"><div><span className="section-kicker"><MinerIcon small /> {l('БРОКЕРСКИЙ АГЕНТ · AUDCAD', 'BROKER AGENT · AUDCAD')}</span><h2>{!mt5Account ? l('Счёт MT5 не подключён', 'MT5 account not connected') : mt5Account.accountType === 'real' ? l('Исполнение MT5 Live', 'MT5 Live execution') : l('Исполнение MT5 Demo', 'MT5 Demo execution')}</h2></div><span className={`status-badge ${agentEnabled ? (mt5Account?.accountType === 'real' ? 'live-risk-badge' : '') : 'muted'}`}>{agentEnabled ? l('РАБОТАЕТ', 'RUNNING') : l('ПАУЗА', 'PAUSED')}</span></div>
+                <div className={`broker-risk-notice ${mt5Account?.accountType === 'real' ? 'live-warning' : ''}`}><ShieldCheck size={15} /><span>{!mt5Account ? l('Подключите свой MT5-счёт, чтобы увидеть данные брокера.', 'Connect an MT5 account to view broker data.') : mt5Account.accountType === 'real' ? l('LIVE: реальные ордера. Максимум 0,01 лота, SL/TP, дневной стоп и лимит equity остаются включены. Запуск Live требует отдельного подтверждения.', 'LIVE: real orders. The 0.01-lot cap, SL/TP, daily stop and equity cap remain enabled. Live start requires separate confirmation.') : l('MT5 DEMO: ордера отправляются только на подключённый учебный счёт брокера. Лимиты: ≤0,01 лота, SL/TP, дневной стоп 1% и предел счёта 80 млн.', 'MT5 DEMO: orders go only to the connected broker demo account. Limits: ≤0.01 lot, SL/TP, 1% daily stop and 80M account cap.')}</span></div>
+                {!mt5Account && <button className="connect-button" onClick={() => setModal('connect')}><Plus size={15} /> {l('Подключить MT5 Demo / Bybit', 'Connect MT5 Demo / Bybit')}</button>}
+                <div className="schedule-inline"><label>{l('С', 'From')}<input type="time" value={agentSchedule.start} onChange={(event) => setAgentSchedule((current) => ({ ...current, start: event.target.value }))} /></label><label>{l('До', 'To')}<input type="time" value={agentSchedule.end} onChange={(event) => setAgentSchedule((current) => ({ ...current, end: event.target.value }))} /></label><div className="weekday-picker compact-weekdays"><span>{l('Дни ·', 'Days ·')} {Intl.DateTimeFormat().resolvedOptions().timeZone}</span><div>{(language === 'ru' ? ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] : ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']).map((label, day) => <button key={day} type="button" className={agentSchedule.days.includes(day) ? 'selected' : ''} aria-pressed={agentSchedule.days.includes(day)} onClick={() => setAgentSchedule((current) => ({ ...current, days: current.days.includes(day) ? current.days.filter((item) => item !== day) : [...current.days, day].sort() }))}>{label}</button>)}</div></div></div>
+                {agentSchedule.start === agentSchedule.end && <small className="schedule-note">{l('Одинаковое время означает весь выбранный день.', 'Matching start/end times mean all day on selected weekdays.')}</small>}
+                <div className="agent-performance-grid compact-performance"><div><small>{l('P&L агента сегодня', 'Agent P&L today')}</small><strong className={Number(brokerAgentStatus?.dailyPnl || 0) >= 0 ? 'positive-text' : 'negative-text'}>{brokerAgentStatus?.dailyPnl !== undefined ? `${Number(brokerAgentStatus.dailyPnl).toFixed(2)} ${mt5Account?.currency || ''}` : '—'}</strong></div><div><small>{l('Сигнал', 'Signal')}</small><strong>{analysis?.signal || l('Нет данных', 'No data')}</strong></div><div><small>{l('Состояние', 'Status')}</small><strong>{brokerGoalReached ? l('Лимит 80 млн достигнут', '80M cap reached') : (brokerAgentStatus?.state || l('Ожидание', 'Waiting'))}</strong></div></div>
                 <div className="analyst-consensus" aria-live="polite">
-                  <div className="analyst-consensus-heading"><strong>{l('СОГЛАСОВАННОЕ РЕШЕНИЕ', 'ANALYST CONSENSUS')}</strong><span className={analystConsensus.entryAllowed ? 'consensus-ready' : 'consensus-wait'}>{analystConsensus.entryAllowed ? `${l('ВХОД', 'ENTRY')} · ${analystConsensus.decision}` : `${l('ОЖИДАНИЕ', 'WAIT')} · ${analystConsensus.reason.replaceAll('_', ' ')}`}</span></div>
+                  <div className="analyst-consensus-heading"><strong>{l('АНАЛИЗ СИГНАЛА', 'ANALYST CHECKS')}</strong><span className={analystConsensus.entryAllowed ? 'consensus-ready' : 'consensus-wait'}>{analystConsensus.entryAllowed ? `${l('ВХОД', 'ENTRY')} · ${analystConsensus.decision}` : `${l('ОЖИДАНИЕ', 'WAIT')} · ${analystConsensus.reason.replaceAll('_', ' ')}`}</span></div>
                   <div className="analyst-status-grid">
-                    <span><b>{l('Техника', 'Technical')}</b><small>{analystConsensus.analysts.technical.ready ? analystConsensus.analysts.technical.signal : l('Нет сигнала', 'No directional signal')}</small></span>
-                    <span><b>{l('Интернет · дневной ориентир', 'Internet · daily reference')}</b><small>{analystConsensus.analysts.internet.ready ? `${Number(analystConsensus.analysts.internet.rate).toFixed(5)} · ${analystConsensus.analysts.internet.sourceDate}` : l(`Проверка нужна: ${analystConsensus.analysts.internet.reason}`, `Check needed: ${analystConsensus.analysts.internet.reason.replaceAll('_', ' ')}`)}</small></span>
-                    <span><b>{l('Адаптация', 'Adaptive/history')}</b><small>{analystConsensus.analysts.learning.state === 'warming_up' ? l('Сбор закрытых сделок', 'Collecting closed trades') : analystConsensus.analysts.learning.state === 'adaptive_filter' ? l('Фильтр входа ужесточён', 'Entry filter tightened') : analystConsensus.analysts.learning.state === 'learning_cooldown' ? l('Пауза после серии убытков', 'Loss-streak cooldown') : `${analystConsensus.analysts.learning.closedTrades} ${l('закрытых сделок', 'closed trades')}`}</small></span>
+                    <span><b>{l('Техника', 'Technical')}</b><small>{analystConsensus.analysts.technical.ready ? analystConsensus.analysts.technical.signal : l('Нет сигнала', 'No signal')}</small></span>
+                    <span><b>{l('Дневной ориентир', 'Daily reference')}</b><small>{analystConsensus.analysts.internet.ready ? `${Number(analystConsensus.analysts.internet.rate).toFixed(5)} · ${analystConsensus.analysts.internet.sourceDate}` : l('Ожидает свежую проверку', 'Awaiting validated reference')}</small></span>
+                    <span><b>{l('История MT5', 'MT5 history')}</b><small>{analystConsensus.analysts.learning.state === 'learning_cooldown' ? l('Пауза после убытков', 'Loss cooldown') : `${analystConsensus.analysts.learning.closedTrades} ${l('закрытых сделок', 'closed trades')}`}</small></span>
                   </div>
-                  {!analystConsensus.analysts.market.ready && <small className="quote-freshness-warning">{analystConsensus.analysts.market.reason === 'quote_stale' ? l(`Последний MT5 тик ${analystConsensus.analysts.market.ageSeconds} с назад. Новые входы заблокированы до свежей котировки; проверьте подключение терминала, Market Watch и часы торгов.`, `Last MT5 tick was ${analystConsensus.analysts.market.ageSeconds}s ago. New entries stay blocked until a fresh broker quote arrives; check terminal connectivity, Market Watch, and market hours.`) : analystConsensus.analysts.market.reason === 'quote_clock_skew' ? l(`Часы MT5 опережают компьютер на ${analystConsensus.analysts.market.clockSkewSeconds} с. Синхронизируйте время Windows и терминала; новые входы заблокированы.`, `MT5 clock is ${analystConsensus.analysts.market.clockSkewSeconds}s ahead of this computer. Sync Windows and terminal clocks; new entries remain blocked.`) : analystConsensus.analysts.market.reason === 'quote_timestamp_invalid' ? l('Время котировки MT5 некорректно или устарело; новые входы остаются заблокированы.', 'MT5 quote timestamp is invalid or old; new entries remain blocked.') : l('Нет доступной котировки MT5; новые входы остаются заблокированы до получения свежего тика.', 'No MT5 quote is available; new entries remain blocked until a fresh tick arrives.')}</small>}
-                  <small className="consensus-footnote">{l('Новая сделка требует всех трёх проверок. Дневной курс — только проверка источника, не live-котировка и не прогноз направления.', 'A new entry requires all three checks. The daily rate validates the source only; it is neither a live quote nor a directional forecast.')}</small>
+                  {!analystConsensus.analysts.market.ready && <small className="quote-freshness-warning">{analystConsensus.analysts.market.reason === 'quote_stale' ? l(`Последний MT5 тик ${analystConsensus.analysts.market.ageSeconds} с назад; новые входы заблокированы.`, `Last MT5 tick was ${analystConsensus.analysts.market.ageSeconds}s ago; new entries are blocked.`) : l('Нет свежей котировки MT5; новые входы заблокированы.', 'No fresh MT5 quote; new entries are blocked.')}</small>}
                 </div>
-                {executionMode === 'mt5' && brokerAgentStatus && <div className={`broker-agent-message ${['error', 'daily_loss_stop', 'terminal_trading_disabled'].includes(brokerAgentStatus.state) ? 'error-state' : ''}`}><span>{brokerAgentStatus.message || brokerAgentStatus.learning || l('Последний цикл', 'Last cycle') + ': ' + brokerAgentStatus.state}</span><small>{brokerAgentStatus.winRate === null || brokerAgentStatus.winRate === undefined ? l('Обучение: ожидаются закрытые сделки', 'Learning: waiting for closed trades') : `${l('Доля прибыльных закрытых сделок', 'Closed-trade win rate')}: ${(brokerAgentStatus.winRate * 100).toFixed(0)}% · ${brokerAgentStatus.closedTrades} ${l('сделок', 'trades')} · ${brokerAgentStatus.consecutiveLosses || 0} ${l('убытков подряд', 'losses in a row')}`}</small></div>}
-                <div className="agent-actions compact-agent-actions"><button className={paperAgent.enabled ? 'modal-danger' : 'modal-primary'} onClick={startOrPauseAgent}>{paperAgent.enabled ? <Pause size={14} /> : <Play size={14} />}{paperAgent.enabled ? l('ВЫКЛ · ПАУЗА', 'OFF · PAUSE') : executionMode === 'paper' ? l('ВКЛ · PAPER', 'ON · PAPER') : executionMode === 'mt5' && mt5Account?.accountType === 'real' ? l('ВКЛ · LIVE', 'ON · LIVE') : l('ВКЛ · MT5 DEMO', 'ON · MT5 DEMO')}</button><span className="agent-feed-status"><Activity size={14} /> {paperAgent.enabled ? l('Анализ на новых тиках · входы с защитным интервалом', 'Analysis on new ticks · entries remain risk-throttled') : l('Стратегия: EMA(20/50) + RSI(14)', 'Strategy: EMA(20/50) + RSI(14)')}</span></div>
-                <p className="muted-copy compact-agent-note">{l('Адаптация использует только закрытые результаты: после 5 сделок с win rate <40% фильтр входа ужесточается; 2 убытка подряд дают паузу на 1 час. Это не обучение нейросети и не гарантия безубыточности. ОТКЛ останавливает новые входы, но не закрывает уже открытую брокером позицию: её SL/TP остаются у брокера. SL не гарантирует цену исполнения при гэпе/проскальзывании.', 'Adaptation uses closed outcomes only: after 5 trades below 40% win rate, entry filter tightens; 2 consecutive losses pause entries for 1 hour. This is not neural-network learning or a no-loss guarantee. OFF stops new entries but does not close an existing broker position; its SL/TP remain at the broker. A stop does not guarantee execution price through gaps or slippage.')}</p>
+                {brokerAgentStatus?.message && <div className={`broker-agent-message ${['error', 'daily_loss_stop', 'terminal_trading_disabled'].includes(brokerAgentStatus.state) ? 'error-state' : ''}`}>{brokerAgentStatus.message}</div>}
+                <div className="agent-actions compact-agent-actions"><button className={agentEnabled ? 'modal-danger' : 'modal-primary'} onClick={startOrPauseAgent}>{agentEnabled ? <Pause size={14} /> : <Play size={14} />}{agentEnabled ? l('ВЫКЛ · ПАУЗА', 'OFF · PAUSE') : mt5Account?.accountType === 'real' ? l('ВКЛ · LIVE', 'ON · LIVE') : l('ВКЛ · MT5 DEMO', 'ON · MT5 DEMO')}</button><span className="agent-feed-status"><Activity size={14} /> {agentEnabled ? l('Анализ на новых тиках · входы с защитным интервалом', 'Analysis on new ticks · entries remain risk-throttled') : l('Запуск доступен после подключения MT5', 'Connect MT5 to enable the runner')}</span></div>
+                <p className="muted-copy compact-agent-note">{l('Отключение агента прекращает новые входы, но не закрывает брокерские позиции; SL/TP остаются на сервере. Пауза, проскальзывание и закрытие с убытком возможны.', 'Pausing the agent stops new entries but does not close broker positions; SL/TP remain at the server. Slippage and loss-making exits remain possible.')}</p>
               </article>
             </div>
-            <article className="panel paper-history-panel"><details className="compact-agent-log"><summary><span>{l('Журнал paper-сделок и виртуальных средств', 'Paper trades & virtual cash ledger')}</span><b>{paperAgent.trades.length + (paperAgent.cashFlows || []).length}</b></summary>{paperAgent.cashFlows?.length > 0 && <div className="cash-ledger-list">{paperAgent.cashFlows.slice(0, 8).map((entry) => <span key={entry.id}>{new Date(entry.time).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')} · {entry.amount >= 0 ? l('Пополнение', 'Deposit') : l('Снятие', 'Withdrawal')} <b className={entry.amount >= 0 ? 'positive-text' : 'negative-text'}>{entry.amount >= 0 ? '+' : ''}{Number(entry.amount).toFixed(2)} CAD</b> · {Number(entry.balanceAfter).toFixed(2)} CAD</span>)}</div>}{paperAgent.trades.length ? <div className="data-table-wrap"><table className="data-table"><thead><tr><th>{l('Рынок', 'Market')}</th><th>{l('Тип', 'Side')}</th><th>{l('Вход', 'Entry')}</th><th>{l('Выход', 'Exit')}</th><th>{l('Результат CAD', 'Result CAD')}</th><th>{l('Статус', 'Status')}</th></tr></thead><tbody>{paperAgent.trades.map((trade) => <tr key={trade.id}><td><strong>{trade.symbol}</strong><small>{new Date(trade.openTime).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')}</small></td><td>{trade.side}</td><td>{Number(trade.openPrice).toFixed(5)}</td><td>{trade.closePrice ? Number(trade.closePrice).toFixed(5) : '—'}</td><td className={Number(trade.pnl || 0) >= 0 ? 'positive-text' : 'negative-text'}>{trade.pnl === undefined ? '—' : Number(trade.pnl).toFixed(2)}</td><td>{trade.status === 'closed' ? l('ЗАКРЫТА · PAPER', 'CLOSED · PAPER') : trade.status === 'session stopped' ? l('СЕССИЯ ОСТАНОВЛЕНА', 'SESSION STOPPED') : l('ОТКРЫТА · PAPER', 'OPEN · PAPER')}</td></tr>)}</tbody></table></div> : <div className="empty-inline">{l('Paper-сделок пока нет.', 'No paper trades yet.')}</div>}</details></article>
           </section>}
 
           {activeNav === 'Positions' && <section className="page-section">
@@ -981,7 +928,7 @@ function App() {
             <div className="section-page-heading"><div><span className="section-kicker">RESEARCH LIBRARY · AUDCAD</span><h1>{l('Библиотека стратегий', 'Strategy library')}</h1><p>{l('Каталог популярных FX-подходов с правилами; исследовательские шаблоны не подключены к live-исполнению.', 'A catalog of common FX methods and rules; research templates are not connected to live execution.')}</p></div></div>
             <div className="strategy-category-row">{[['all', l('Все', 'All')], ['trend', l('Тренд', 'Trend')], ['range', l('Диапазон', 'Range')], ['breakout', l('Пробой', 'Breakout')], ['session', l('Сессия', 'Session')], ['price', l('Свечи', 'Price action')], ['macro', l('Макро', 'Macro')]].map(([id, label]) => <button key={id} className={strategyFilter === id ? 'selected' : ''} onClick={() => setStrategyFilter(id)}>{label}</button>)}</div>
             <div className="strategy-library-layout"><div className="strategy-picker-grid">{strategyCatalog.filter((strategy) => strategyFilter === 'all' || strategy.group === strategyFilter).map((strategy) => <button key={strategy.id} className={`strategy-choice ${selectedStrategy === strategy.id ? 'selected' : ''}`} onClick={() => setSelectedStrategy(strategy.id)}><Sparkles size={13} /><span>{strategy.name}</span>{strategy.id === 'ema-cross' && <small>{l('В АГЕНТЕ', 'RUNNER')}</small>}</button>)}</div>
-              {(() => { const detail = strategyCatalog.find((strategy) => strategy.id === selectedStrategy) || strategyCatalog[0]; return <article className="panel strategy-detail-card"><div className="strategy-detail-title"><span className="strategy-mark"><Sparkles size={16} /></span><div><span className="section-kicker">{detail.method} · AUDCAD</span><h2>{detail.name}</h2></div><span className={`status-badge ${detail.id === 'ema-cross' ? '' : 'muted'}`}>{detail.id === 'ema-cross' ? l('РАБОТАЕТ В АГЕНТЕ', 'ACTIVE RUNNER') : l('ШАБЛОН ИССЛЕДОВАНИЯ', 'RESEARCH TEMPLATE')}</span></div><p>{language === 'ru' ? detail.ru : detail.en}</p><div className="strategy-rule-box"><strong>{l('Как использовать', 'How to use')}</strong><span>{detail.id === 'ema-cross' ? l('Эта версия работает в агенте; остальные методы здесь пока справочный каталог и не выставляют ордера.', 'This method is active in the runner; other entries are reference templates and do not place orders.') : l('Сравните на истории AUD/CAD с учётом спреда, комиссий и проскальзывания; сначала используйте Paper/MT5 Demo.', 'Evaluate on AUD/CAD history including spread, fees and slippage; begin with Paper/MT5 Demo.')}</span></div><small className="strategy-disclaimer">{l('Список охватывает распространённые подходы, а не «все существующие» стратегии. Ни один паттерн не гарантирует прибыль.', 'This covers common methods, not every strategy ever devised. No pattern guarantees profit.')}</small></article>; })()}
+              {(() => { const detail = strategyCatalog.find((strategy) => strategy.id === selectedStrategy) || strategyCatalog[0]; return <article className="panel strategy-detail-card"><div className="strategy-detail-title"><span className="strategy-mark"><Sparkles size={16} /></span><div><span className="section-kicker">{detail.method} · AUDCAD</span><h2>{detail.name}</h2></div><span className={`status-badge ${detail.id === 'ema-cross' ? '' : 'muted'}`}>{detail.id === 'ema-cross' ? l('РАБОТАЕТ В АГЕНТЕ', 'ACTIVE RUNNER') : l('ШАБЛОН ИССЛЕДОВАНИЯ', 'RESEARCH TEMPLATE')}</span></div><p>{language === 'ru' ? detail.ru : detail.en}</p><div className="strategy-rule-box"><strong>{l('Как использовать', 'How to use')}</strong><span>{detail.id === 'ema-cross' ? l('Эта версия работает в агенте; остальные методы здесь пока справочный каталог и не выставляют ордера.', 'This method is active in the runner; other entries are reference templates and do not place orders.') : l('Сравните на истории AUD/CAD с учётом спреда, комиссий и проскальзывания; сначала используйте MT5 Demo.', 'Evaluate on AUD/CAD history including spread, fees and slippage; begin with MT5 Demo.')}</span></div><small className="strategy-disclaimer">{l('Список охватывает распространённые подходы, а не «все существующие» стратегии. Ни один паттерн не гарантирует прибыль.', 'This covers common methods, not every strategy ever devised. No pattern guarantees profit.')}</small></article>; })()}
             </div>
           </section>}
 
@@ -1006,7 +953,7 @@ function App() {
               <p>Enter the login and exact server shown in MT5. An investor password permits reading only; the optional auto-trader requires a trading-enabled password. Orders are disabled until you manually arm the agent and obey its hard risk limits.</p>
               <form className="account-form" onSubmit={connectAccount}>
                 <label>MT5 account number<input autoComplete="username" inputMode="numeric" value={accountForm.login} onChange={(event) => setAccountForm({ ...accountForm, login: event.target.value })} placeholder="Account login" required /></label>
-                <label>MT5 server <span className="field-optional">choose or type</span><input list="mt5-server-suggestions" value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="Bybit-Live or exact server name" required /><datalist id="mt5-server-suggestions"><option value="MetaQuotes-Demo" />{['Bybit-Live', ...Array.from({ length: 6 }, (_, index) => `Bybit-Live${index + 2}`), 'Bybit-Demo'].map((server) => <option value={server} key={server} />)}{recentServers.map((server) => <option value={server} key={server} />)}{savedAccount?.server && <option value={savedAccount.server} />}</datalist><div className="server-preset-row"><button className="secondary-action" type="button" onClick={() => setAccountForm((form) => ({ ...form, server: 'Bybit-Live' }))}>{l('Bybit MT5 Live', 'Bybit MT5 Live')}</button><button className="text-action" type="button" onClick={() => window.moneyWork?.openBybitMt5Guide?.()}>{l('Открыть инструкцию Bybit', 'Bybit MT5 setup')}</button></div><small className="server-help">{l('Сначала откройте отдельный MT5 CFD-счёт в Bybit. Введите именно его MT5 ID, MT5 trading password и сервер, указанные в Bybit; это не UID/пароль сайта Bybit. Список серверов может отличаться — выберите точное имя из данных счёта.', 'First create the separate MT5 CFD account in Bybit. Enter its MT5 ID, MT5 trading password and exact server from Bybit—not your Bybit UID or website password. Server names can vary; use the exact one shown in your account.')}</small></label>
+                <label>MT5 server <span className="field-optional">choose or type</span><input list="mt5-server-suggestions" value={accountForm.server} onChange={(event) => setAccountForm({ ...accountForm, server: event.target.value })} placeholder="Bybit-Live or exact server name" required /><datalist id="mt5-server-suggestions"><option value="MetaQuotes-Demo" />{['Bybit-Live', ...Array.from({ length: 6 }, (_, index) => `Bybit-Live${index + 2}`), 'Bybit-Demo'].map((server) => <option value={server} key={server} />)}{recentServers.map((server) => <option value={server} key={server} />)}{savedAccount?.server && <option value={savedAccount.server} />}</datalist><div className="server-preset-row"><button className="secondary-action" type="button" onClick={() => setAccountForm((form) => ({ ...form, server: 'Bybit-Demo' }))}>{l('Bybit MT5 Demo', 'Bybit MT5 Demo')}</button><button className="secondary-action" type="button" onClick={() => setAccountForm((form) => ({ ...form, server: 'Bybit-Live' }))}>{l('Bybit MT5 Live', 'Bybit MT5 Live')}</button><button className="text-action" type="button" onClick={() => window.moneyWork?.openBybitMt5Guide?.()}>{l('Инструкция Bybit', 'Bybit MT5 guide')}</button></div><small className="server-help">{l('Сначала откройте отдельный MT5 CFD-счёт в Bybit. Введите именно его MT5 ID, MT5 trading password и сервер, указанные в Bybit; это не UID/пароль сайта Bybit. Список серверов может отличаться — выберите точное имя из данных счёта.', 'First create the separate MT5 CFD account in Bybit. Enter its MT5 ID, MT5 trading password and exact server from Bybit—not your Bybit UID or website password. Server names can vary; use the exact one shown in your account.')}</small></label>
                 <div className="demo-register-prompt"><span>{l('Нет демо-счёта?', 'No demo account?')}</span><button type="button" onClick={() => setModal('demo-register')}>{l('Как зарегистрировать', 'Register a demo account')} <ArrowUpRight size={13} /></button></div>
                 <label>MT5 account password<input type="password" autoComplete="current-password" value={accountForm.password} onChange={(event) => setAccountForm({ ...accountForm, password: event.target.value })} placeholder="Trader password is required for order execution" required /><small className="server-help">The investor password allows read-only access. The automated agent needs a trading-enabled password. Never send it in chat.</small></label>
                 <label>MT5 terminal path <span className="field-optional">optional</span><input value={accountForm.terminalPath} onChange={(event) => setAccountForm({ ...accountForm, terminalPath: event.target.value })} placeholder="Auto-detect, or C:\\Program Files\\...\\terminal64.exe" /></label>
@@ -1020,7 +967,7 @@ function App() {
           </> : modal === 'live-trading-confirmation' ? <>
             <span className="section-kicker">LIVE ORDER CONFIRMATION</span>
             <h2>{l('Подтвердить автоторговлю на реальном счёте?', 'Enable automated orders on your real account?')}</h2>
-            <div className="paper-warning live-warning"><ShieldCheck size={15} /><span>{l('Будут отправляться реальные AUDCAD-ордера. Лимиты: не более 0,01 лота, одна позиция, фиксация от 0,30 валюты счёта на 0,01 лота, SL 20 пипсов, TP 30 пипсов, остановка при балансе или эквити 80 млн валюты счёта и при дневном убытке 1%. Сигнал/стоп могут закрыть сделку с убытком; гэпы и проскальзывание остаются возможны.', 'This can send real AUDCAD orders. Caps: up to 0.01 lot, one position, cash close from 0.30 account-currency units per 0.01 lot, 20-pip SL, 30-pip TP, stop when balance or equity reaches 80 million account-currency units; 1% daily loss stop. Signal/stops can still close at a loss; gaps and slippage remain possible.')}</span></div>
+            <div className="risk-warning live-warning"><ShieldCheck size={15} /><span>{l('Будут отправляться реальные AUDCAD-ордера. Лимиты: не более 0,01 лота, одна позиция, фиксация от 0,30 валюты счёта на 0,01 лота, SL 20 пипсов, TP 30 пипсов, остановка при балансе или эквити 80 млн валюты счёта и при дневном убытке 1%. Сигнал/стоп могут закрыть сделку с убытком; гэпы и проскальзывание остаются возможны.', 'This can send real AUDCAD orders. Caps: up to 0.01 lot, one position, cash close from 0.30 account-currency units per 0.01 lot, 20-pip SL, 30-pip TP, stop when balance or equity reaches 80 million account-currency units; 1% daily loss stop. Signal/stops can still close at a loss; gaps and slippage remain possible.')}</span></div>
             <label className="live-confirm-field">{l('Для подтверждения введи LIVE', 'Type LIVE to confirm')}<input autoComplete="off" value={liveConfirmText} onChange={(event) => setLiveConfirmText(event.target.value)} placeholder="LIVE" /></label>
             <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>{l('Отмена', 'Cancel')}</button><button className="modal-danger" onClick={confirmLiveAgent} disabled={liveConfirmText.trim() !== 'LIVE'}>{l('ПОДТВЕРДИТЬ И ЗАПУСТИТЬ', 'CONFIRM AND START')}</button></div>
           </> : modal === 'demo-register' ? <>
@@ -1044,10 +991,10 @@ function App() {
             {mt5Error && <div className="connection-error">{mt5Error}</div>}
             <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>Close</button></div>
           </> : <>
-            <span className="section-kicker">SAFE DEMO MODE</span>
-            <h2>{modal === 'profile' ? 'Local demo profile' : 'Demo workspace'}</h2>
-            <p>Sample balances and signals are illustrative. Connected MT5 quotes and account information are real. Broker orders are sent only when you explicitly arm the auto agent, pass the live confirmation gate where applicable, and the bridge-side risk checks all pass.</p>
-            <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>Close</button><button className="modal-primary" onClick={() => { setModal(''); setActiveNav('Risk controls'); }}>Review safety panel</button></div>
+            <span className="section-kicker">MONEY WORK ACCOUNT</span>
+            <h2>{l('Рабочая область счёта', 'Account workspace')}</h2>
+            <p>{l('Здесь отображаются только данные подключённого MT5-счёта. Подключите MT5 Demo или Live, чтобы загрузить рыночные данные.', 'Only data from a connected MT5 account is shown here. Connect MT5 Demo or Live to load broker data.')}</p>
+            <div className="modal-actions"><button className="modal-secondary" onClick={() => setModal('')}>{l('Закрыть', 'Close')}</button><button className="modal-primary" onClick={() => setModal('connect')}>{l('Подключить MT5', 'Connect MT5')}</button></div>
           </>}
         </div>
       </div>}

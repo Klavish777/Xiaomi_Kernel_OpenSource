@@ -16,7 +16,12 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the installer after the full Windows test/build job succeeds
+        description: Publish a stable installer after the full Windows test/build job succeeds
+        type: boolean
+        required: false
+        default: false
+      verified_demo:
+        description: Confirm the candidate passed a user-device check on an MT5 Demo account
         type: boolean
         required: false
         default: false
@@ -142,7 +147,7 @@ jobs:
           retention-days: 14
 
   publish-release:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && inputs.verified_demo }}
     needs: windows-installer
     runs-on: windows-latest
     permissions:
@@ -165,6 +170,7 @@ jobs:
           $version = (Get-Content money-work/VERSION -Raw).Trim()
           $package = (Get-Content money-work/package.json -Raw | ConvertFrom-Json).version
           if ($version -ne $package) { throw "VERSION ($version) differs from package.json ($package)" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Refusing to publish a prerelease or invalid stable version: $version" }
           $tag = "money-work-v$version"
           $installer = "money-work/release/Money-Work-Setup-$version.exe"
           if (!(Test-Path $installer)) { throw "Tested installer artifact is missing: $installer" }
@@ -172,5 +178,5 @@ jobs:
           if ($existing) {
             gh release upload $tag $installer --clobber
           } else {
-            gh release create $tag $installer --title "Money Work v$version" --notes "Money Work v$version normalizes MT5 quote timestamp units and tolerates only a small server-clock offset while the tick is newly received; stale or significantly future-dated quotes remain blocked. Equal schedule start/end times now explicitly mean all day on selected weekdays, fixing the 00:00–00:00 schedule being incorrectly reported outside_schedule. The app also has a validated Bank of Canada daily AUD/CAD fallback, clearer quote diagnostics, and update notices. Existing trading permissions, explicit real-account confirmation, 0.01-lot cap, account-currency profit target, mandatory SL/TP, daily loss stop, and account-equity cap remain unchanged. Tests and the Windows installer build run before manual publishing is enabled." --prerelease
+            gh release create $tag $installer --title "Money Work v$version" --notes "Money Work v$version removes the in-app Paper simulator while retaining MT5 Demo and explicitly confirmed MT5 Live connectivity. Bybit is supported through its dedicated MT5 CFD account. Account/position polling and chart refresh use responsive request intervals; new data still depends on MT5 delivery. The 0.01-lot maximum, 0.30 account-currency profit target per 0.01 lot, protective SL/TP, daily stop, and 80-million account-currency balance/equity stop remain in force. Public FX references are daily, not live prices. Tested on an MT5 Demo terminal before release."
           }

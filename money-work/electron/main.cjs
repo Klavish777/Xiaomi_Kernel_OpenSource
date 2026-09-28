@@ -179,7 +179,7 @@ ipcMain.handle('external:open-app-release', async (_event, version) => {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(safeVersion)) throw new Error('Invalid Money Work release version.');
   return shell.openExternal(`https://github.com/Klavish777/Xiaomi_Kernel_OpenSource/releases/tag/money-work-v${safeVersion}`);
 });
-ipcMain.handle('external:open-bybit-mt5-guide', async () => shell.openExternal('https://www.bybit.com/en/derivative-activity/tradfi'));
+ipcMain.handle('external:open-bybit-mt5-guide', async () => shell.openExternal('https://www.bybit.com/en/help-center/article/How-to-Get-Started-with-MT5-CFD-Account'));
 
 ipcMain.handle('window:toggle-fullscreen', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return false;

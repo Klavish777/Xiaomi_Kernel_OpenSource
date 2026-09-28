@@ -1,5 +1,3 @@
-export const MAX_AGENT_EQUITY = 80_000_000;
-
 export function isInsideSchedule(date, start, end, days) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return false;
   const selectedDays = new Set(Array.isArray(days) ? days.map(Number) : []);
@@ -159,78 +157,6 @@ export function validateReferencePayload(payload, now = new Date()) {
   };
 }
 
-export function advancePaperAgent(state, { signal, price, quoteTime, symbol, settings, allowEntry = true, now = new Date() }) {
-  if (state?.goalReached) return state;
-  const timestamp = Number(quoteTime);
-  const marketPrice = Number(price);
-  if (!state?.enabled || !Number.isFinite(timestamp) || !Number.isFinite(marketPrice) || marketPrice <= 0) return state;
-  if (timestamp <= Number(state.lastEvaluatedAt || 0)) return state;
-
-  const next = { ...state, lastEvaluatedAt: timestamp };
-  const insideSchedule = isInsideSchedule(now, settings.start, settings.end, settings.days);
-  const direction = signal === 'WATCH BUY' ? 1 : signal === 'WATCH SELL' ? -1 : 0;
-  const trades = Array.isArray(state.trades) ? [...state.trades] : [];
-  const position = state.position || null;
-  const floatingPnl = position ? (marketPrice - Number(position.openPrice)) * Number(position.units) * Number(position.direction) : 0;
-  const currentEquity = Number(state.capital || 0) + Number(state.realizedPnl || 0) + floatingPnl;
-  if (currentEquity >= MAX_AGENT_EQUITY) {
-    next.enabled = false;
-    next.goalReached = true;
-    if (position) {
-      const pnl = floatingPnl;
-      const closed = { ...position, closePrice: marketPrice, closeTime: now.toISOString(), pnl, status: 'closed' };
-      next.position = null;
-      next.realizedPnl = Number(state.realizedPnl || 0) + pnl;
-      next.trades = [closed, ...trades.filter((trade) => trade.id !== position.id)].slice(0, 50);
-    }
-    next.lastAction = `Equity goal ${MAX_AGENT_EQUITY.toLocaleString()} reached; Paper agent stopped`;
-    return next;
-  }
-
-  if (position && (!insideSchedule || (direction && direction !== position.direction))) {
-    const pnl = (marketPrice - position.openPrice) * position.units * position.direction;
-    const closed = {
-      ...position,
-      closePrice: marketPrice,
-      closeTime: now.toISOString(),
-      pnl,
-      status: 'closed',
-    };
-    next.position = null;
-    next.realizedPnl = Number(state.realizedPnl || 0) + pnl;
-    next.trades = [closed, ...trades.filter((trade) => trade.id !== position.id)].slice(0, 50);
-    next.lastAction = `${symbol} paper position closed`;
-    return next;
-  }
-
-  if (!position && insideSchedule && direction && !allowEntry) return next;
-
-  if (!position && insideSchedule && direction && allowEntry) {
-    const capital = Math.min(10000000, Math.max(0, Number(settings.capital) || 0));
-    const maxAllocation = Math.min(10000000, Math.max(0, Number(settings.maxAllocation) || 0));
-    const allocation = Math.min(capital, maxAllocation);
-    const units = allocation / marketPrice;
-    if (allocation > 0 && Number.isFinite(units)) {
-      const opened = {
-        id: `${timestamp}-${symbol}`,
-        symbol,
-        direction,
-        side: direction > 0 ? 'BUY' : 'SELL',
-        openPrice: marketPrice,
-        openTime: now.toISOString(),
-        units,
-        allocation,
-        status: 'open',
-      };
-      next.position = opened;
-      next.trades = [opened, ...trades].slice(0, 50);
-      next.lastAction = `${symbol} paper ${opened.side} opened`;
-      return next;
-    }
-  }
-  return state;
-}
-
 export function validateReferenceRecord(reference, now = new Date()) {
   if (!reference || typeof reference !== 'object') return { valid: false, reason: 'missing' };
   const payload = { base: reference.base, date: reference.sourceDate, rates: { CAD: reference.rate } };
@@ -241,26 +167,6 @@ export function validateReferenceRecord(reference, now = new Date()) {
   const fresh = Number.isFinite(fetched) && ageMs >= 0 && ageMs <= 24 * 60 * 60 * 1000;
   const recent = sourceAgeDays >= 0 && sourceAgeDays <= 7;
   return { valid: daily.valid && fresh && recent, rate: daily.rate, sourceDate: daily.date, fetchedAt: Number.isFinite(fetched) ? fetched : null, reason: !daily.valid ? 'invalid' : !fresh ? 'stale_fetch' : !recent ? 'stale_source' : 'verified' };
-}
-
-export function summarizePaperHistory(trades, now = new Date()) {
-  const closed = (Array.isArray(trades) ? trades : []).filter((trade) => trade?.status === 'closed');
-  const recent = [...closed].sort((left, right) => Date.parse(right.closeTime) - Date.parse(left.closeTime));
-  let consecutiveLosses = 0;
-  for (const trade of recent) {
-    if (!Number.isFinite(Date.parse(trade.closeTime)) || Number(trade.pnl) >= 0) break;
-    consecutiveLosses += 1;
-  }
-  const lastLossTime = consecutiveLosses >= 2 ? Date.parse(recent[0]?.closeTime) : NaN;
-  const cooldownUntil = Number.isFinite(lastLossTime) ? lastLossTime + 60 * 60 * 1000 : null;
-  const winRate = closed.length ? closed.filter((trade) => Number(trade.pnl) > 0).length / closed.length : null;
-  return {
-    state: cooldownUntil !== null && now.getTime() < cooldownUntil && now.getTime() >= lastLossTime ? 'learning_cooldown' : undefined,
-    closedTrades: closed.length,
-    winRate,
-    consecutiveLosses,
-    cooldownUntil,
-  };
 }
 
 export function movingAverageValues(bars, period, type = 'SMA') {
@@ -332,22 +238,6 @@ export function buildAnalystConsensus({ analysis, quote, referenceData, brokerSt
       learning: { ready: !hardBlocked && learnedEntryAllowed, state: hardBlocked ? state : learnerTightened && !learnedEntryAllowed ? 'adaptive_filter' : closedTrades ? 'learning' : 'warming_up', closedTrades, winRate: Number.isFinite(winRate) ? winRate : null },
     },
   };
-}
-
-export function adjustVirtualBalance(state, direction, amount, now = new Date()) {
-  const value = Number(amount);
-  const adjustment = Number(direction);
-  if (![1, -1].includes(adjustment) || !Number.isFinite(value) || value <= 0 || value > 1000000) {
-    return { ok: false, code: 'invalid_amount' };
-  }
-  if (adjustment < 0 && value > Number(state.capital) - Number(state.position?.allocation || 0)) {
-    return { ok: false, code: 'reserved_funds' };
-  }
-  const nextCapital = Number(state.capital) + adjustment * value;
-  if (nextCapital < 0 || nextCapital > MAX_AGENT_EQUITY) return { ok: false, code: 'balance_limit' };
-  const goalReached = Boolean(state.goalReached) || nextCapital + Number(state.realizedPnl || 0) >= MAX_AGENT_EQUITY;
-  const entry = { id: `${now.getTime()}-${adjustment}`, type: adjustment > 0 ? 'deposit' : 'withdrawal', amount: adjustment * value, balanceAfter: nextCapital, time: now.toISOString() };
-  return { ok: true, state: { ...state, capital: nextCapital, enabled: goalReached ? false : state.enabled, goalReached, cashFlows: [entry, ...(state.cashFlows || [])].slice(0, 50) }, entry };
 }
 
 export function computeRuleSignal(bars) {

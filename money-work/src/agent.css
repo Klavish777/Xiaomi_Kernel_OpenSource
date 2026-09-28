@@ -14,11 +14,6 @@
 .research-mini small,.research-value small { color:#8492a6; font-size:9px; line-height:1.45; }
 .agent-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:13px; }
 .text-action { display:inline-flex; align-items:center; gap:4px; border:0; background:none; color:#a9c5ff; font-size:9px; font-weight:600; }
-.paper-overview-row { display:flex; align-items:center; gap:13px; padding:13px 15px; margin-bottom:16px; background:linear-gradient(105deg,#151a25,#11151e); }
-.paper-overview-icon { display:grid; place-items:center; flex:0 0 auto; width:38px; height:38px; border:1px solid #3b4b67; border-radius:10px; background:#1b2639; color:#a9c5ff; }
-.paper-overview-copy { display:grid; gap:4px; flex:1; min-width:0; }
-.paper-overview-copy strong { color:#e7edf7; font-size:12px; }
-.paper-overview-copy small { color:#8793a5; font-size:9px; line-height:1.45; }
 .agents-page { gap:9px; }
 .agents-page .section-page-heading { padding-bottom:0; }
 .agent-control-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:stretch; }
@@ -40,27 +35,14 @@
 .reference-comparison strong { font-size:10px; }
 .reference-comparison small { grid-column:1 / -1; color:#788598; font-size:8px; line-height:1.45; }
 .neutral-text { color:#bac6d9; }
-.paper-warning { display:flex; align-items:flex-start; gap:7px; margin:8px 0; padding:8px; border:1px solid #4b4430; border-radius:8px; background:#242116; color:#dfc98e; font-size:8px; font-weight:700; line-height:1.4; }
-.paper-warning svg { flex:0 0 auto; color:#e6c36e; }
+.broker-risk-notice,.risk-warning { display:flex; align-items:flex-start; gap:7px; margin:8px 0; padding:8px; border:1px solid #4b4430; border-radius:8px; background:#242116; color:#dfc98e; font-size:8px; font-weight:700; line-height:1.4; }
+.broker-risk-notice svg,.risk-warning svg { flex:0 0 auto; color:#e6c36e; }
 .live-warning { border-color:#70464a; background:#2b1c21; color:#f1b9ae; }
 .live-risk-badge { border-color:#72494d; background:#351f24; color:#ffb8b2; }
-.execution-mode-picker { display:flex; gap:5px; margin-top:10px; }
-.execution-mode-picker button { min-height:28px; padding:5px 10px; border:1px solid #30394a; border-radius:6px; background:#10151e; color:#8f9bad; font-size:8px; font-weight:700; }
-.execution-mode-picker button.selected { border-color:#526c9a; background:#1a2940; color:#c0d3f7; }
-.execution-mode-picker button:disabled { opacity:.55; cursor:not-allowed; }
-.paper-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-.paper-config-grid label,.schedule-inline label { display:grid; gap:4px; color:#9aa6b7; font-size:8px; line-height:1.35; }
-.paper-config-grid input,.schedule-inline input { width:100%; min-width:0; min-height:32px; padding:0 8px; border:1px solid #30394a; border-radius:7px; outline:none; background:#0d1118; color:#e7edf7; color-scheme:dark; font:10px 'DM Sans',sans-serif; }
-.paper-config-grid input:focus,.schedule-inline input:focus { border-color:#6384c0; box-shadow:0 0 0 3px #6384c01c; }
-.compact-paper-fields { grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:8px; }
-.cash-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; }
-.cash-actions .secondary-action { min-height:27px; padding:5px 8px; font-size:8px; }
-.cash-actions > span { margin-left:auto; color:#8491a4; font-size:8px; }
-.cash-actions > span b { color:#dbe5f3; font-size:9px; }
+.schedule-inline label { display:grid; gap:4px; color:#9aa6b7; font-size:8px; line-height:1.35; }
+.schedule-inline input { width:100%; min-width:0; min-height:32px; padding:0 8px; border:1px solid #30394a; border-radius:7px; outline:none; background:#0d1118; color:#e7edf7; color-scheme:dark; font:10px 'DM Sans',sans-serif; }
+.schedule-inline input:focus { border-color:#6384c0; box-shadow:0 0 0 3px #6384c01c; }
 .compact-error { padding:5px 7px; margin-top:5px; font-size:8px; }
-.live-account-summary { display:grid; gap:5px; margin-top:8px; padding:8px; border:1px solid #2c3749; border-radius:7px; background:#111722; color:#97a4b7; font-size:8px; }
-.live-account-summary span:first-child { display:flex; justify-content:space-between; }
-.live-account-summary b { color:#e6edf8; font-size:10px; }
 .schedule-inline { display:grid; grid-template-columns:78px 78px minmax(0,1fr); align-items:end; gap:8px; margin-top:9px; }
 .weekday-picker { display:grid; gap:7px; }
 .weekday-picker > span { color:#8d99aa; font-size:8px; }
@@ -71,10 +53,10 @@
 .compact-weekdays { gap:4px; }
 .compact-weekdays > div { gap:3px; }
 .compact-weekdays button { width:26px; height:25px; }
-.paper-performance-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-top:9px; }
-.paper-performance-grid > div { display:grid; align-content:start; gap:4px; min-height:45px; padding:7px; border:1px solid #272f3c; border-radius:7px; background:#10151d; }
-.paper-performance-grid small { color:#788598; font-size:8px; line-height:1.35; }
-.paper-performance-grid strong { color:#e1e8f2; font-size:9px; overflow-wrap:anywhere; }
+.agent-performance-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-top:9px; }
+.agent-performance-grid > div { display:grid; align-content:start; gap:4px; min-height:45px; padding:7px; border:1px solid #272f3c; border-radius:7px; background:#10151d; }
+.agent-performance-grid small { color:#788598; font-size:8px; line-height:1.35; }
+.agent-performance-grid strong { color:#e1e8f2; font-size:9px; overflow-wrap:anywhere; }
 .compact-performance { margin-top:8px; }
 .analyst-consensus { display:grid; gap:7px; margin-top:8px; padding:8px; border:1px solid #2b394c; border-radius:7px; background:#111a25; }
 .analyst-consensus-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:5px; }
@@ -95,24 +77,12 @@
 .broker-agent-message { display:grid; gap:3px; margin-top:7px; padding:7px 8px; border:1px solid #2b394c; border-radius:7px; background:#111a25; color:#bac8dc; font-size:8px; line-height:1.4; }
 .broker-agent-message small { color:#8391a5; font-size:8px; }
 .broker-agent-message.error-state { border-color:#75464b; background:#2b1b20; color:#f0adad; }
-.paper-history-panel { min-width:0; padding:9px 13px; }
-.compact-agent-log > summary { display:flex; align-items:center; justify-content:space-between; cursor:pointer; list-style:none; color:#aab6c9; font-size:9px; }
-.compact-agent-log > summary::-webkit-details-marker { display:none; }
-.compact-agent-log > summary b { color:#8592a5; font-size:8px; }
-.cash-ledger-list { display:grid; gap:4px; max-height:115px; margin:9px 0; overflow:auto; }
-.cash-ledger-list span { color:#8895a8; font-size:8px; }
-.cash-ledger-list b { margin-left:4px; }
-.paper-history-panel .data-table-wrap { max-height:280px; margin-top:8px; }
-.paper-history-panel .data-table { min-width:660px; }
 .live-confirm-field { display:grid; gap:6px; margin-top:14px; color:#c5ceda; font-size:9px; }
 .live-confirm-field input { min-height:38px; padding:0 10px; border:1px solid #55424a; border-radius:7px; outline:0; background:#14141b; color:#fff; font:600 12px 'DM Sans',sans-serif; }
 .live-confirm-field input:focus { border-color:#a27179; }
 @media (max-width: 1050px) { .agent-control-grid { grid-template-columns:1fr; } }
 @media (max-width: 700px) {
-  .paper-overview-row { flex-wrap:wrap; }
-  .paper-overview-row .text-action { margin-left:auto; }
-  .compact-paper-fields { grid-template-columns:repeat(2,minmax(0,1fr)); }
-  .paper-performance-grid { grid-template-columns:1fr; }
+  .agent-performance-grid { grid-template-columns:1fr; }
   .schedule-inline { grid-template-columns:72px 72px minmax(0,1fr); gap:5px; }
   .compact-weekdays button { width:22px; }
   .research-feature { align-items:flex-start; }
@@ -158,15 +128,8 @@ body { overflow:hidden; }
   .research-mini small { font-size:8px; }
   .agent-card .agent-actions { gap:6px; margin-top:7px; }
   .agent-card .secondary-action { min-height:28px; padding:5px 8px; }
-  .paper-overview-row { gap:9px; padding:8px 10px; margin-bottom:0; }
-  .paper-overview-icon { width:30px; height:30px; }
-  .paper-overview-copy { gap:2px; }
-  .paper-overview-copy strong { font-size:10px; }
-  .paper-overview-copy small { font-size:8px; line-height:1.25; }
-  .paper-overview-row .status-badge { padding:4px 6px; }
-  .paper-overview-row .secondary-action { min-height:28px; padding:5px 8px; }
   .agents-fit { padding-top:10px; padding-bottom:10px; }
-  .agents-fit .agents-page { height:100%; min-height:0; grid-template-rows:auto minmax(0,1fr) auto; gap:7px; }
+  .agents-fit .agents-page { height:100%; min-height:0; grid-template-rows:auto minmax(0,1fr); gap:7px; }
   .agents-fit .section-page-heading h1 { font-size:18px; }
   .agents-fit .section-page-heading p { margin-top:3px; font-size:9px; }
   .agents-fit .agent-control-grid { min-height:0; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:8px; }
@@ -185,21 +148,13 @@ body { overflow:hidden; }
   .agents-fit .reference-comparison small { font-size:7px; }
   .agents-fit .agent-actions { gap:5px; margin-top:6px; }
   .agents-fit .agent-actions .secondary-action,.agents-fit .agent-actions .modal-primary { min-height:27px; padding:4px 7px; font-size:8px; }
-  .agents-fit .paper-warning { margin:5px 0; padding:6px; font-size:7px; }
-  .agents-fit .execution-mode-picker { margin-top:6px; }
-  .agents-fit .execution-mode-picker button { min-height:24px; padding:4px 8px; }
-  .agents-fit .compact-paper-fields { gap:5px; margin-top:6px; }
-  .agents-fit .paper-config-grid label { gap:3px; font-size:7px; }
-  .agents-fit .paper-config-grid input,.agents-fit .schedule-inline input { min-height:26px; padding:0 6px; font-size:9px; }
-  .agents-fit .cash-actions { gap:4px; margin-top:5px; }
-  .agents-fit .cash-actions .secondary-action { min-height:23px; padding:4px 6px; font-size:7px; }
-  .agents-fit .cash-actions > span { font-size:7px; }
-  .agents-fit .live-account-summary { gap:3px; margin-top:5px; padding:6px; font-size:7px; }
+  .agents-fit .broker-risk-notice,.agents-fit .risk-warning { margin:5px 0; padding:6px; font-size:7px; }
+  .agents-fit .schedule-inline input { min-height:26px; padding:0 6px; font-size:9px; }
   .agents-fit .schedule-inline { grid-template-columns:64px 64px minmax(0,1fr); gap:5px; margin-top:6px; }
   .agents-fit .schedule-inline label,.agents-fit .weekday-picker > span { font-size:7px; }
   .agents-fit .compact-weekdays button { width:22px; height:22px; }
-  .agents-fit .paper-performance-grid { gap:4px; margin-top:6px; }
-  .agents-fit .paper-performance-grid > div { min-height:35px; gap:2px; padding:5px; }
+  .agents-fit .agent-performance-grid { gap:4px; margin-top:6px; }
+  .agents-fit .agent-performance-grid > div { min-height:35px; gap:2px; padding:5px; }
   .agents-fit .analyst-consensus { gap:4px; margin-top:5px; padding:6px; }
   .agents-fit .analyst-status-grid { gap:4px; }
   .agents-fit .analyst-status-grid b { font-size:7px; }
@@ -209,7 +164,6 @@ body { overflow:hidden; }
   .agents-fit .compact-agent-actions .modal-primary,.agents-fit .compact-agent-actions .modal-danger { min-height:27px; padding:5px 8px; font-size:8px; }
   .agents-fit .agent-feed-status { font-size:7px; }
   .agents-fit .compact-agent-note { margin-top:5px; font-size:7px; line-height:1.25; }
-  .agents-fit .paper-history-panel { padding:7px 10px; }
 }
 @media (min-width:901px) and (max-height:720px) {
   .topbar { flex-basis:52px; height:52px; }
