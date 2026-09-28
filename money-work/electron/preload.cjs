@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('moneyWork', {
   openMt5Download: () => ipcRenderer.invoke('external:open-mt5-download'),
+  getBankOfCanadaReference: () => ipcRenderer.invoke('reference:bank-of-canada'),
+  openAppRelease: (version) => ipcRenderer.invoke('external:open-app-release', version),
   openBybitMt5Guide: () => ipcRenderer.invoke('external:open-bybit-mt5-guide'),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
   onFullscreenChange: (callback) => {

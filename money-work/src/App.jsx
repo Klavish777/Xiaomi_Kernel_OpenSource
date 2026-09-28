@@ -7,7 +7,7 @@ import {
   Brain, Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
   Globe, Bot, Play, Pause, CircleCheck, Settings2,
 } from 'lucide-react';
-import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, movingAverageValues, sliceChartHistory, summarizePaperHistory, validateReferencePayload } from './agentCore.mjs';
+import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, findNewerAppRelease, movingAverageValues, normalizeBankOfCanadaReference, sliceChartHistory, summarizePaperHistory, validateReferencePayload } from './agentCore.mjs';
 import realisticEarth from './assets/realistic-earth.png';
 import cartoonBrain from './assets/cartoon-brain.png';
 import cartoonMiner from './assets/cartoon-miner.png';
@@ -199,7 +199,12 @@ function App() {
   const [researchLoading, setResearchLoading] = useState(false);
   const [researchStatus, setResearchStatus] = useState('');
   const [researchRate, setResearchRate] = useState(0);
+  const [availableUpdate, setAvailableUpdate] = useState(null);
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState('');
+  const [updateMessage, setUpdateMessage] = useState('');
+  const [updateCheckStatus, setUpdateCheckStatus] = useState('idle');
   const researchBusy = useRef(false);
+  const updateCheckBusy = useRef(false);
   const paperLastQuoteTime = useRef(0);
   const brokerEvaluateBusy = useRef(false);
   const liveQuote = quotes[selectedSymbol];
@@ -374,6 +379,18 @@ function App() {
     });
   }, [analysis, liveQuote, referenceData, brokerAgentStatus, paperAgent.trades, executionMode, technicalAgentEnabled, researchRunning]);
 
+  async function fetchDailyReference(url, normalize = (payload) => payload) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 9000);
+    try {
+      const response = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return normalize(await response.json());
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async function runInternetResearch() {
     if (researchBusy.current) return;
     researchBusy.current = true;
@@ -381,12 +398,29 @@ function App() {
     setResearchStatus('');
     const startedAt = performance.now();
     try {
-      const response = await fetch('https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD', { headers: { Accept: 'application/json' }, cache: 'no-store' });
-      if (!response.ok) throw new Error(`Reference source returned HTTP ${response.status}.`);
-      const payload = await response.json();
-      const validated = validateReferencePayload(payload);
-      if (!validated.valid) throw new Error('Reference data failed schema, date, or positive-rate checks.');
-      const result = { base: 'AUD', rate: validated.rate, sourceDate: validated.date, fetchedAt: new Date().toISOString(), source: 'Frankfurter / central-bank daily reference', checks: validated.checks };
+      let validated;
+      let source;
+      let primaryFailure;
+      try {
+        const payload = await fetchDailyReference('https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD');
+        validated = validateReferencePayload(payload);
+        if (!validated.valid) throw new Error('Frankfurter response failed schema/date/rate checks.');
+        source = 'Frankfurter API / central-bank daily reference';
+      } catch (error) {
+        primaryFailure = error;
+        try {
+          const bankPayload = window.moneyWork?.getBankOfCanadaReference
+            ? await window.moneyWork.getBankOfCanadaReference()
+            : await fetchDailyReference('https://www.bankofcanada.ca/valet/observations/FXAUDCAD/json?recent=1');
+          const payload = normalizeBankOfCanadaReference(bankPayload);
+          validated = validateReferencePayload(payload);
+          if (!validated.valid) throw new Error('Bank of Canada response failed schema/date/rate checks.');
+          source = 'Bank of Canada Valet · AUD/CAD daily average';
+        } catch (fallbackError) {
+          throw new Error(`Frankfurter unavailable (${primaryFailure.message}); Bank of Canada fallback unavailable (${fallbackError.message}).`);
+        }
+      }
+      const result = { base: 'AUD', rate: validated.rate, sourceDate: validated.date, fetchedAt: new Date().toISOString(), source, checks: validated.checks };
       setReferenceData(result);
       localStorage.setItem(REFERENCE_STORAGE_KEY, JSON.stringify(result));
       const elapsed = Math.max(250, performance.now() - startedAt);
@@ -400,12 +434,59 @@ function App() {
     }
   }
 
+  async function checkForAppUpdate(showCurrent = false) {
+    if (updateCheckBusy.current) return;
+    updateCheckBusy.current = true;
+    setUpdateCheckStatus('checking');
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      let response;
+      try {
+        response = await fetch('https://api.github.com/repos/Klavish777/Xiaomi_Kernel_OpenSource/releases?per_page=50', {
+          headers: { Accept: 'application/vnd.github+json' },
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}.`);
+      const newerVersion = findNewerAppRelease(await response.json(), packageJson.version);
+      setAvailableUpdate(newerVersion ? { version: newerVersion } : null);
+      setUpdateCheckStatus(newerVersion ? 'available' : 'current');
+      setUpdateMessage(newerVersion
+        ? l(`Доступно обновление Money Work v${newerVersion}.`, `Money Work v${newerVersion} is available.`)
+        : (showCurrent ? l(`Установлена последняя версия v${packageJson.version}.`, `You have the latest version, v${packageJson.version}.`) : ''));
+    } catch (error) {
+      setUpdateCheckStatus('failed');
+      setUpdateMessage(showCurrent ? l(`Не удалось проверить обновления: ${error.message}`, `Update check failed: ${error.message}`) : '');
+    } finally {
+      updateCheckBusy.current = false;
+    }
+  }
+
+  async function openAppRelease(version) {
+    if (!version) return;
+    if (window.moneyWork?.openAppRelease) {
+      await window.moneyWork.openAppRelease(version);
+      return;
+    }
+    window.open(`https://github.com/Klavish777/Xiaomi_Kernel_OpenSource/releases/tag/money-work-v${encodeURIComponent(version)}`, '_blank', 'noopener,noreferrer');
+  }
+
   useEffect(() => {
     if (!researchRunning) return undefined;
     runInternetResearch();
     const timer = setInterval(runInternetResearch, 15 * 60 * 1000);
     return () => clearInterval(timer);
   }, [researchRunning]);
+
+  useEffect(() => {
+    checkForAppUpdate(false);
+    const timer = setInterval(() => checkForAppUpdate(false), 6 * 60 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem(TECHNICAL_AGENT_STORAGE_KEY, String(technicalAgentEnabled)); } catch { /* persistent browser storage may be unavailable */ }
@@ -715,13 +796,15 @@ function App() {
               {mt5Account ? <><Activity size={15} /> {mt5Account.server}</> : <><Plus size={15} /> {t('Add MT5 account')}</>}
             </button>
             <button className="top-icon" aria-label="Search"><Search size={17} /></button>
-            <button className="top-icon notification-button" aria-label="Notifications"><Bell size={17} /><i /></button>
+            <button className={`top-icon notification-button ${availableUpdate ? 'update-available' : ''}`} onClick={() => availableUpdate ? openAppRelease(availableUpdate.version) : checkForAppUpdate(true)} title={availableUpdate ? l(`Скачать обновление v${availableUpdate.version}`, `Download update v${availableUpdate.version}`) : l('Проверить обновления', 'Check for updates')} aria-label={availableUpdate ? l(`Доступно обновление v${availableUpdate.version}`, `Update v${availableUpdate.version} available`) : l('Проверить обновления', 'Check for updates')} disabled={updateCheckStatus === 'checking'}><Bell size={17} />{availableUpdate && <i />}</button>
             <label className="language-control" title={t('Language')}><Languages size={14} /><select aria-label={t('Language')} value={language} onChange={(event) => setLanguage(event.target.value)}><option value="ru">RU</option><option value="en">EN</option></select></label><button className="top-icon fullscreen-button" onClick={async () => { if (window.moneyWork) setFullScreen(await window.moneyWork.toggleFullscreen()); }} title={fullScreen ? t('Windowed') : t('Fullscreen')} aria-label={fullScreen ? t('Windowed') : t('Fullscreen')}><Maximize2 size={16} /></button><div className="top-divider" />
             <div className="top-user-avatar">AM</div>
           </div>
         </header>
 
         <div className={`page-content workspace-content ${activeNav === 'Overview' ? 'overview-fit' : activeNav === 'Agents' ? 'agents-fit' : ''}`}>
+          {availableUpdate && dismissedUpdateVersion !== availableUpdate.version && <div className="app-update-banner" role="status"><Bell size={15} /><span>{l(`Доступно обновление Money Work v${availableUpdate.version}.`, `Money Work v${availableUpdate.version} is available.`)}</span><button className="app-update-download" onClick={() => openAppRelease(availableUpdate.version)}>{l('Скачать', 'Download')} <ArrowUpRight size={13} /></button><button className="app-update-dismiss" aria-label={l('Скрыть уведомление', 'Dismiss update notice')} onClick={() => setDismissedUpdateVersion(availableUpdate.version)}><X size={14} /></button></div>}
+          {!availableUpdate && updateMessage && <div className="update-check-message" role="status">{updateMessage}<button onClick={() => setUpdateMessage('')} aria-label={l('Закрыть', 'Dismiss')}><X size={13} /></button></div>}
           {mt5Error && <div className="connector-banner"><ShieldCheck size={15} /> {mt5Error}<button onClick={() => setMt5Error('')}>Dismiss</button></div>}
 
           {activeNav === 'Overview' && <>
@@ -772,7 +855,7 @@ function App() {
                 <div className="agent-control-heading"><div><span className="section-kicker"><Globe size={14} /> {l('АГЕНТ СБОРА ДАННЫХ', 'INTERNET DATA AGENT')}</span><h2>{l('Публичный ориентир AUD/CAD', 'Public AUD/CAD reference')}</h2></div><span className={`status-badge ${researchRunning ? '' : 'muted'}`}>{researchLoading ? l('СКАНИРОВАНИЕ', 'SCANNING') : researchRunning ? l('РАБОТАЕТ', 'RUNNING') : l('ПАУЗА', 'PAUSED')}</span></div>
                 <div className="research-feature"><div className={`globe-orb large-globe ${researchRunning ? 'spinning' : ''}`} style={{ '--globe-speed': `${Math.max(2, Math.min(24, 900 / Math.max(1, researchRate)))}s` }} aria-label={l('Глобус вращается во время работы агента', 'Globe rotates while the agent is running')}><span /><i /><b /></div><div className="research-value"><strong>{referenceData ? Number(referenceData.rate).toFixed(5) : '—'}</strong><small>AUD / CAD · {referenceData ? referenceData.sourceDate : l('ожидает первую проверку', 'awaiting first scan')}</small><small>{researchRate ? `${researchRate} ${l('проверок в минуту по скорости последнего цикла', 'checks per minute based on the latest scan')}` : l('Скорость появится после успешного запроса', 'Speed appears after the first successful request')}</small></div></div>
                 <div className="research-results-list">{['response schema', 'publication date', 'AUD/CAD reference rate'].map((check, index) => { const result = referenceData?.checks?.find((item) => item.name === check); return <span key={check}><CircleCheck size={14} className={result?.ok ? 'check-ok' : 'check-pending'} />{l(['Формат ответа API', 'Дата публикации', 'Курс больше нуля'][index], check)}<b>{result ? (result.ok ? l('ПРОЙДЕНО', 'PASS') : l('ОШИБКА', 'FAIL')) : l('ОЖИДАЕТ', 'PENDING')}</b></span>; })}</div>
-                {referenceData && <p className="research-footnote">{l('Источник', 'Source')}: Frankfurter API · {l('время запроса', 'fetched')}: {new Date(referenceData.fetchedAt).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')} · {l('публичный дневной справочный курс, не live-котировка.', 'public daily reference rate, not a live quote.')}</p>}
+                {referenceData && <p className="research-footnote">{l('Источник', 'Source')}: {referenceData.source || 'Frankfurter API'} · {l('время запроса', 'fetched')}: {new Date(referenceData.fetchedAt).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')} · {l('публичный дневной справочный курс, не live-котировка.', 'public daily reference rate, not a live quote.')}</p>}
                 {referenceGapBps !== null && <div className="reference-comparison"><span>{l('Разница с mid MT5', 'Difference vs MT5 mid')}</span><strong className="neutral-text">{referenceGapBps >= 0 ? '+' : ''}{referenceGapBps.toFixed(1)} bps</strong><small>{l('Только сопоставление разных временных источников, не торговый сигнал.', 'Comparison across differently timed sources only, not a trading signal.')}</small></div>}
                 {researchStatus && researchStatus !== 'validated' && <div className="connection-error">{researchStatus}</div>}
                 <div className="agent-actions"><button className="modal-primary" onClick={runInternetResearch} disabled={researchLoading}><RefreshCw size={14} /> {researchLoading ? l('Сканирование…', 'Scanning…') : l('Проверить сейчас', 'Check now')}</button><button className="secondary-action" onClick={() => setResearchRunning((running) => !running)}>{researchRunning ? <Pause size={14} /> : <Play size={14} />}{researchRunning ? l('Остановить цикл', 'Pause schedule') : l('Запуск · раз в 15 мин', 'Start · every 15 min')}</button></div>
@@ -801,6 +884,7 @@ function App() {
                     <span><b>{l('Интернет · дневной ориентир', 'Internet · daily reference')}</b><small>{analystConsensus.analysts.internet.ready ? `${Number(analystConsensus.analysts.internet.rate).toFixed(5)} · ${analystConsensus.analysts.internet.sourceDate}` : l(`Проверка нужна: ${analystConsensus.analysts.internet.reason}`, `Check needed: ${analystConsensus.analysts.internet.reason.replaceAll('_', ' ')}`)}</small></span>
                     <span><b>{l('Адаптация', 'Adaptive/history')}</b><small>{analystConsensus.analysts.learning.state === 'warming_up' ? l('Сбор закрытых сделок', 'Collecting closed trades') : analystConsensus.analysts.learning.state === 'adaptive_filter' ? l('Фильтр входа ужесточён', 'Entry filter tightened') : analystConsensus.analysts.learning.state === 'learning_cooldown' ? l('Пауза после серии убытков', 'Loss-streak cooldown') : `${analystConsensus.analysts.learning.closedTrades} ${l('закрытых сделок', 'closed trades')}`}</small></span>
                   </div>
+                  {!analystConsensus.analysts.market.ready && <small className="quote-freshness-warning">{analystConsensus.analysts.market.reason === 'quote_stale' ? l(`Последний MT5 тик ${analystConsensus.analysts.market.ageSeconds} с назад. Новые входы заблокированы до свежей котировки; проверьте подключение терминала, Market Watch и часы торгов.`, `Last MT5 tick was ${analystConsensus.analysts.market.ageSeconds}s ago. New entries stay blocked until a fresh broker quote arrives; check terminal connectivity, Market Watch, and market hours.`) : analystConsensus.analysts.market.reason === 'quote_timestamp_invalid' ? l('Время котировки MT5 некорректно; новые входы остаются заблокированы.', 'MT5 quote timestamp is invalid; new entries remain blocked.') : l('Нет доступной котировки MT5; новые входы остаются заблокированы до получения свежего тика.', 'No MT5 quote is available; new entries remain blocked until a fresh tick arrives.')}</small>}
                   <small className="consensus-footnote">{l('Новая сделка требует всех трёх проверок. Дневной курс — только проверка источника, не live-котировка и не прогноз направления.', 'A new entry requires all three checks. The daily rate validates the source only; it is neither a live quote nor a directional forecast.')}</small>
                 </div>
                 {executionMode === 'mt5' && brokerAgentStatus && <div className={`broker-agent-message ${['error', 'daily_loss_stop', 'terminal_trading_disabled'].includes(brokerAgentStatus.state) ? 'error-state' : ''}`}><span>{brokerAgentStatus.message || brokerAgentStatus.learning || l('Последний цикл', 'Last cycle') + ': ' + brokerAgentStatus.state}</span><small>{brokerAgentStatus.winRate === null || brokerAgentStatus.winRate === undefined ? l('Обучение: ожидаются закрытые сделки', 'Learning: waiting for closed trades') : `${l('Доля прибыльных закрытых сделок', 'Closed-trade win rate')}: ${(brokerAgentStatus.winRate * 100).toFixed(0)}% · ${brokerAgentStatus.closedTrades} ${l('сделок', 'trades')} · ${brokerAgentStatus.consecutiveLosses || 0} ${l('убытков подряд', 'losses in a row')}`}</small></div>}

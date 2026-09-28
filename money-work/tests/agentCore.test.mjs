@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, computeRuleSignal, isInsideSchedule, summarizePaperHistory, movingAverageValues, sliceChartHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
+import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, compareAppVersions, computeRuleSignal, findNewerAppRelease, isInsideSchedule, normalizeBankOfCanadaReference, summarizePaperHistory, movingAverageValues, sliceChartHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
 
 test('schedule follows selected local weekdays and inclusive start/exclusive end', () => {
   const mondayMorning = new Date(2026, 8, 28, 9, 0);
@@ -25,6 +25,33 @@ test('internet reference validates schema, not-future date and positive rate', (
   assert.equal(validateReferencePayload({ base: 'AUD', date: '2026-09-25', rates: { CAD: -1 } }, now).valid, false);
 });
 
+test('Bank of Canada fallback normalizes and validates its daily AUD/CAD observations', () => {
+  const normalized = normalizeBankOfCanadaReference({ observations: [
+    { d: '2026-09-25', FXAUDCAD: { v: '0.9940' } },
+    { d: '2026-09-24', FXAUDCAD: { v: '0.9923' } },
+  ] });
+  assert.deepEqual(normalized, { base: 'AUD', date: '2026-09-25', rates: { CAD: 0.994 } });
+  assert.equal(validateReferencePayload(normalized, new Date('2026-09-28T12:00:00Z')).valid, true);
+  assert.deepEqual(normalizeBankOfCanadaReference({ observations: [] }).rates, { CAD: null });
+  assert.deepEqual(normalizeBankOfCanadaReference({ observations: [{ d: '2026-09-25', FXAUDCAD: { v: '0' } }] }).rates, { CAD: null });
+});
+
+test('version checker selects only a newer Money Work release tag', () => {
+  const releases = [
+    { tag_name: 'money-work-v0.4.15' },
+    { tag_name: 'money-work-v0.4.17', draft: true },
+    { tag_name: 'other-product-v9.0.0' },
+    { tag_name: 'money-work-v0.4.16', html_url: 'https://attacker.invalid' },
+  ];
+  assert.equal(findNewerAppRelease(releases, '0.4.15'), '0.4.16');
+  assert.equal(findNewerAppRelease(releases, '0.4.16'), null);
+  assert.equal(findNewerAppRelease(releases, '0.4.17'), null);
+  assert.equal(compareAppVersions('0.4.16', '0.4.15'), 1);
+  assert.equal(compareAppVersions('0.4.16', '0.4.16'), 0);
+  assert.equal(compareAppVersions('0.4.15', '0.4.16'), -1);
+  assert.equal(compareAppVersions('bad', '0.4.16'), null);
+});
+
 test('three-analyst consensus requires directional data, fresh quote, validated reference and learner clearance', () => {
   const now = new Date('2026-09-26T12:00:00Z');
   const quote = { bid: 0.9, ask: 0.90002, timeMsc: now.getTime() };
@@ -32,12 +59,19 @@ test('three-analyst consensus requires directional data, fresh quote, validated 
   const ready = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote, referenceData, brokerStatus: { closedTrades: 2 }, now });
   assert.equal(ready.entryAllowed, true);
   assert.equal(ready.analysts.technical.signal, 'WATCH BUY');
+  assert.equal(ready.analysts.market.ready, true);
   assert.equal(ready.analysts.internet.ready, true);
   assert.equal(ready.analysts.learning.state, 'learning');
 
   const missingReference = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote, brokerStatus: {}, now });
   assert.equal(missingReference.entryAllowed, false);
   assert.equal(missingReference.reason, 'reference_missing');
+  const staleQuote = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote: { bid: 0.9, ask: 0.90002, timeMsc: now.getTime() - 31000 }, referenceData, brokerStatus: {}, now });
+  assert.equal(staleQuote.entryAllowed, false);
+  assert.equal(staleQuote.reason, 'quote_stale');
+  assert.equal(staleQuote.analysts.market.ageSeconds, 31);
+  const noQuote = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, referenceData, brokerStatus: {}, now });
+  assert.equal(noQuote.reason, 'quote_unavailable');
   const weakLearning = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 65 }, quote, referenceData, brokerStatus: { closedTrades: 5, winRate: 0.2 }, now });
   assert.equal(weakLearning.entryAllowed, false);
   assert.equal(weakLearning.reason, 'adaptive_filter');

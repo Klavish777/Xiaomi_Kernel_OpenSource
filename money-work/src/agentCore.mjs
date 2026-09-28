@@ -24,6 +24,44 @@ export function isInsideSchedule(date, start, end, days) {
   return false;
 }
 
+export function normalizeBankOfCanadaReference(payload) {
+  if (!Array.isArray(payload?.observations)) return { base: 'AUD', date: null, rates: { CAD: null } };
+  const observation = payload.observations.find((row) => typeof row?.d === 'string' && Number.isFinite(Number(row?.FXAUDCAD?.v)) && Number(row.FXAUDCAD.v) > 0);
+  return observation
+    ? { base: 'AUD', date: observation.d, rates: { CAD: Number(observation.FXAUDCAD.v) } }
+    : { base: 'AUD', date: null, rates: { CAD: null } };
+}
+
+function parseAppVersion(version) {
+  const match = /^(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(version || '').trim());
+  if (!match) return null;
+  return { parts: match.slice(1, 4).map(Number), prerelease: match[4] || '' };
+}
+
+export function compareAppVersions(left, right) {
+  const a = parseAppVersion(left);
+  const b = parseAppVersion(right);
+  if (!a || !b) return null;
+  for (let index = 0; index < 3; index += 1) {
+    if (a.parts[index] !== b.parts[index]) return a.parts[index] > b.parts[index] ? 1 : -1;
+  }
+  if (a.prerelease === b.prerelease) return 0;
+  if (!a.prerelease) return 1;
+  if (!b.prerelease) return -1;
+  return a.prerelease.localeCompare(b.prerelease, undefined, { numeric: true });
+}
+
+export function findNewerAppRelease(releases, currentVersion) {
+  if (!Array.isArray(releases)) return null;
+  const candidates = releases.flatMap((release) => {
+    if (release?.draft || typeof release?.tag_name !== 'string') return [];
+    const match = /^money-work-v((?:\d+)\.(?:\d+)\.(?:\d+)(?:-[0-9A-Za-z.-]+)?)$/.exec(release.tag_name);
+    return match && parseAppVersion(match[1]) ? [{ version: match[1] }] : [];
+  });
+  candidates.sort((a, b) => compareAppVersions(b.version, a.version));
+  return candidates[0] && compareAppVersions(candidates[0].version, currentVersion) > 0 ? candidates[0].version : null;
+}
+
 export function validateReferencePayload(payload, now = new Date()) {
   const parsedDate = typeof payload?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payload.date)
     ? new Date(`${payload.date}T00:00:00Z`)
@@ -183,7 +221,9 @@ export function buildAnalystConsensus({ analysis, quote, referenceData, brokerSt
   const technicalReady = Number.isFinite(rsi) && rsi >= 0 && rsi <= 100 && signal !== 'WAIT';
   const quoteTime = Number(quote?.timeMsc || Number(quote?.time || 0) * 1000);
   const quoteAge = quoteTime ? now.getTime() - quoteTime : Infinity;
-  const quoteReady = Number(quote?.bid) > 0 && Number(quote?.ask) >= Number(quote?.bid) && quoteAge >= 0 && quoteAge <= 30000;
+  const quotePricesValid = Number(quote?.bid) > 0 && Number(quote?.ask) >= Number(quote?.bid);
+  const quoteReady = quotePricesValid && quoteAge >= 0 && quoteAge <= 30000;
+  const quoteReason = !quotePricesValid || !quoteTime ? 'quote_unavailable' : quoteAge < 0 ? 'quote_timestamp_invalid' : quoteAge > 30000 ? 'quote_stale' : 'quote_unavailable';
   const reference = validateReferenceRecord(referenceData, now);
   const state = brokerStatus?.state;
   const hardBlocked = ['error', 'daily_loss_stop', 'learning_cooldown', 'adaptive_filter', 'analyst_paused'].includes(state);
@@ -192,12 +232,13 @@ export function buildAnalystConsensus({ analysis, quote, referenceData, brokerSt
   const learnerTightened = closedTrades >= 5 && Number.isFinite(winRate) && winRate < 0.4;
   const learnedEntryAllowed = !learnerTightened || (signal === 'WATCH BUY' ? rsi < 60 : signal === 'WATCH SELL' ? rsi > 40 : false);
   const entryAllowed = technicalReady && quoteReady && reference.valid && !hardBlocked && learnedEntryAllowed;
-  const reason = hardBlocked ? state : !quoteReady ? 'quote_unavailable' : !reference.valid ? `reference_${reference.reason}` : learnerTightened && !learnedEntryAllowed ? 'adaptive_filter' : !technicalReady ? 'no_directional_signal' : 'consensus_ready';
+  const reason = hardBlocked ? state : !quoteReady ? quoteReason : !reference.valid ? `reference_${reference.reason}` : learnerTightened && !learnedEntryAllowed ? 'adaptive_filter' : !technicalReady ? 'no_directional_signal' : 'consensus_ready';
   return {
     entryAllowed,
     decision: entryAllowed ? signal : 'WAIT',
     reason,
     analysts: {
+      market: { ready: quoteReady, ageSeconds: Number.isFinite(quoteAge) && quoteAge >= 0 ? Math.floor(quoteAge / 1000) : null, reason: quoteReady ? 'verified' : quoteReason },
       technical: { ready: technicalReady, signal, rsi: Number.isFinite(rsi) ? rsi : null },
       internet: { ready: reference.valid, rate: reference.rate, sourceDate: reference.sourceDate, reason: reference.reason },
       learning: { ready: !hardBlocked && learnedEntryAllowed, state: hardBlocked ? state : learnerTightened && !learnedEntryAllowed ? 'adaptive_filter' : closedTrades ? 'learning' : 'warming_up', closedTrades, winRate: Number.isFinite(winRate) ? winRate : null },

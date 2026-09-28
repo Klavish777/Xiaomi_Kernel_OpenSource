@@ -81,14 +81,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Money Work Python bridge/risk tests failed" }
         shell: pwsh
 
-      - name: Verify public AUD/CAD reference endpoint
+      - name: Verify a public AUD/CAD daily reference source
         shell: pwsh
         run: |
-          $reference = Invoke-RestMethod -Uri "https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD" -TimeoutSec 30 -Headers @{ Accept = "application/json" }
-          if ($reference.base -ne "AUD" -or !$reference.rates -or !($reference.rates.CAD -gt 0)) { throw "The public AUD/CAD reference response failed schema/rate checks." }
-          $sourceDate = [DateTime]::ParseExact($reference.date, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
-          if ($sourceDate.Date -gt [DateTime]::UtcNow.Date) { throw "The public AUD/CAD reference date is in the future: $($reference.date)" }
-          Write-Host "Verified AUD/CAD daily reference $($reference.rates.CAD) published $($reference.date)"
+          $rate = $null
+          $published = $null
+          try {
+            $reference = Invoke-RestMethod -Uri "https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD" -TimeoutSec 20 -Headers @{ Accept = "application/json" }
+            if ($reference.base -eq "AUD" -and $reference.rates -and $reference.rates.CAD -gt 0) {
+              $rate = [double]$reference.rates.CAD
+              $published = [DateTime]::ParseExact($reference.date, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+            }
+          } catch { Write-Host "Frankfurter reference check unavailable; trying Bank of Canada fallback: $_" }
+          if (!$rate) {
+            $reference = Invoke-RestMethod -Uri "https://www.bankofcanada.ca/valet/observations/FXAUDCAD/json?recent=1" -TimeoutSec 20 -Headers @{ Accept = "application/json" }
+            $observation = $reference.observations | Where-Object { $_.FXAUDCAD.v -and [double]$_.FXAUDCAD.v -gt 0 } | Select-Object -First 1
+            if (!$observation) { throw "Both daily reference sources failed positive-rate/schema checks." }
+            $rate = [double]$observation.FXAUDCAD.v
+            $published = [DateTime]::ParseExact($observation.d, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+          }
+          if ($published.Date -gt [DateTime]::UtcNow.Date) { throw "The public AUD/CAD reference date is in the future: $published" }
+          if (([DateTime]::UtcNow.Date - $published.Date).TotalDays -gt 7) { throw "The public AUD/CAD reference is older than seven days: $published" }
+          Write-Host "Verified AUD/CAD daily reference $rate published $published"
 
       - name: Install and build Windows installer
         working-directory: money-work
@@ -117,7 +131,7 @@ jobs:
           if ($existing) {
             gh release upload $tag $installer --clobber
           } else {
-            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION adds clearer MT5 algorithmic-trading permission diagnostics, Bybit MT5 CFD server presets, interactive AUD/CAD strategy catalog, draggable 2,000-candle MT5 chart with candle/line, zoom and SMA/EMA controls, and an animated three-agent dashboard with the account balance centered over a realistic Earth graphic. The brain and miner mascots toggle their respective agents, each agent has a settings control, and reduced-motion preferences are respected. Paper stops at 80,000,000 CAD virtual equity; MT5 latches off when balance or equity reaches 80,000,000 units of its account currency (no conversion) and closes only bot-owned positions. The runner retains the 0.01-lot cap, mandatory SL/TP, one-position rule, 1% account-wide daily-loss stop, live confirmation, and adaptive safeguards; cash targets do not guarantee profit or override safety exits. Windows CI runs analyst/reference and mocked broker/risk tests, connector runtime imports, checks the public reference endpoint, and verifies the installer before publishing." --prerelease
+            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION adds a validated Bank of Canada daily AUD/CAD fallback when Frankfurter is unavailable, quote-freshness diagnostics that block entries on stale or missing MT5 ticks, and an in-app notification linking to newer Money Work releases. It retains the MT5 trading-permission checks, Bybit MT5 CFD server presets, interactive AUD/CAD strategy catalog, draggable 2,000-candle MT5 chart, and three-agent dashboard. The brain and miner mascots toggle their respective agents, each agent has a settings control, and reduced-motion preferences are respected. Paper stops at 80,000,000 CAD virtual equity; MT5 latches off when balance or equity reaches 80,000,000 units of its account currency (no conversion) and closes only bot-owned positions. The runner retains the 0.01-lot cap, mandatory SL/TP, one-position rule, 1% account-wide daily-loss stop, live confirmation, and adaptive safeguards; cash targets do not guarantee profit or override safety exits. Windows CI runs analyst/reference and mocked broker/risk tests, connector runtime imports, checks either public daily-reference endpoint, and verifies the installer before publishing. The release workflow publishes only after all tests and packaging checks succeed." --prerelease
           }
 
       - name: Upload installer artifact

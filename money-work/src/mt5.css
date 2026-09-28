@@ -42,3 +42,13 @@
 .server-preset-row { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
 .server-preset-row .secondary-action { min-height:27px; padding:5px 8px; font-size:8px; }
 .server-preset-row .text-action { min-height:27px; font-size:8px; }
+
+.app-update-banner { display:flex; align-items:center; gap:9px; margin-bottom:10px; padding:9px 11px; border:1px solid #415d84; border-radius:8px; background:#162334; color:#d8e7ff; font-size:10px; }
+.app-update-banner > span { flex:1; }
+.app-update-download,.app-update-dismiss,.update-check-message button { display:inline-flex; align-items:center; justify-content:center; gap:4px; border:0; background:none; color:#a9caff; font-size:9px; font-weight:700; cursor:pointer; }
+.app-update-dismiss,.update-check-message button { padding:3px; color:#9ba9bc; }
+.notification-button.update-available { color:#a9caff; }
+.notification-button.update-available i { width:7px; height:7px; background:#6ba7ff; box-shadow:0 0 8px #6ba7ff; }
+.update-check-message { display:flex; align-items:center; gap:8px; margin-bottom:8px; padding:7px 10px; border:1px solid #344052; border-radius:7px; color:#b5c5d9; font-size:9px; }
+.update-check-message button { margin-left:auto; }
+.quote-freshness-warning { display:block; padding:6px 7px; border:1px solid #76523c; border-radius:5px; background:#261d18; color:#edc29b; font-size:7px; line-height:1.45; }

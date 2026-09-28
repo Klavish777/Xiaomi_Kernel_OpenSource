@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, net, safeStorage, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -158,7 +158,27 @@ function createWindow() {
   else mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
+ipcMain.handle('reference:bank-of-canada', async () => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await net.fetch('https://www.bankofcanada.ca/valet/observations/FXAUDCAD/json?recent=1', {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Bank of Canada returned HTTP ${response.status}.`);
+    return response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
 ipcMain.handle('external:open-mt5-download', async () => shell.openExternal('https://www.metatrader5.com/en/download'));
+ipcMain.handle('external:open-app-release', async (_event, version) => {
+  const safeVersion = String(version || '');
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(safeVersion)) throw new Error('Invalid Money Work release version.');
+  return shell.openExternal(`https://github.com/Klavish777/Xiaomi_Kernel_OpenSource/releases/tag/money-work-v${safeVersion}`);
+});
 ipcMain.handle('external:open-bybit-mt5-guide', async () => shell.openExternal('https://www.bybit.com/en/derivative-activity/tradfi'));
 
 ipcMain.handle('window:toggle-fullscreen', () => {
