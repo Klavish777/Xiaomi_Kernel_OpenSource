@@ -9,14 +9,12 @@
 // gates new entries on a recent Frankfurter AUD/CAD reference and the EA's own
 // closed-trade history. It is not a profit guarantee.
 
-input string          InpSymbolPrefix             = "AUDCAD";
 input ENUM_TIMEFRAMES InpTimeframe                = PERIOD_M5;
 input int             InpHistoryBars              = 2000;
 input bool            InpArmTrading               = false;
 input bool            InpAllowLiveTrading         = false;
 input string          InpLiveConfirmation         = "";
 input bool            InpTesterAllowReferenceBypass = false;
-input long            InpMagic                    = 26092709;
 input int             InpStartHour                = 9;
 input int             InpStartMinute              = 0;
 input int             InpEndHour                  = 17;
@@ -40,6 +38,8 @@ input string          InpReferenceUrl             = "https://api.frankfurter.dev
 #define HARD_DAILY_LOSS_PERCENT 1.0
 #define HARD_BALANCE_EQUITY_STOP 80000000.0
 #define HARD_MAX_SPREAD_PIPS 5.0
+#define REQUIRED_SYMBOL_PREFIX "AUDCAD"
+#define EA_MAGIC 26092709
 
 CTrade trade;
 string   g_symbol = "";
@@ -57,7 +57,7 @@ string   g_status = "Starting";
 bool IsAllowedSymbol(const string symbol)
 {
    string upperSymbol = symbol;
-   string upperPrefix = InpSymbolPrefix;
+   string upperPrefix = REQUIRED_SYMBOL_PREFIX;
    StringToUpper(upperSymbol);
    StringToUpper(upperPrefix);
    return StringFind(upperSymbol, upperPrefix) == 0;
@@ -255,7 +255,7 @@ bool ReadHistoryStats(int &closedCount, double &winRate, int &consecutiveLosses,
       const ulong deal = HistoryDealGetTicket(index);
       if(deal == 0) continue;
       if(HistoryDealGetString(deal, DEAL_SYMBOL) != g_symbol) continue;
-      if(HistoryDealGetInteger(deal, DEAL_MAGIC) != InpMagic) continue;
+      if(HistoryDealGetInteger(deal, DEAL_MAGIC) != EA_MAGIC) continue;
       const long entry = HistoryDealGetInteger(deal, DEAL_ENTRY);
       if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY && entry != DEAL_ENTRY_INOUT) continue;
       const double pnl = HistoryDealGetDouble(deal, DEAL_PROFIT)
@@ -304,23 +304,14 @@ bool AccountDailyStats(double &realizedToday, double &floatingPnl, double &daySt
    return dayStartBalance > 0.0;
 }
 
-int FindOwnPosition(ulong &ticket, ENUM_POSITION_TYPE &type, double &volume, double &netProfit)
+int CountOwnPositions()
 {
    int ownCount = 0;
-   ticket = 0;
-   volume = 0.0;
-   netProfit = 0.0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       const ulong current = PositionGetTicket(i);
       if(current == 0 || PositionGetString(POSITION_SYMBOL) != g_symbol) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
-      ownCount++;
-      ticket = current;
-      type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      volume = PositionGetDouble(POSITION_VOLUME);
-      netProfit = PositionGetDouble(POSITION_PROFIT)
-                + PositionGetDouble(POSITION_SWAP);
+      if(PositionGetInteger(POSITION_MAGIC) == EA_MAGIC) ownCount++;
    }
    return ownCount;
 }
@@ -331,9 +322,15 @@ bool HasConflictingPosition()
    {
       const ulong ticket = PositionGetTicket(i);
       if(ticket == 0 || PositionGetString(POSITION_SYMBOL) != g_symbol) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) return true;
+      if(PositionGetInteger(POSITION_MAGIC) != EA_MAGIC) return true;
    }
    return false;
+}
+
+bool TradeRequestExecuted()
+{
+   const uint retcode = trade.ResultRetcode();
+   return retcode == TRADE_RETCODE_DONE || retcode == TRADE_RETCODE_DONE_PARTIAL;
 }
 
 bool CloseOwnPositions(const string reason)
@@ -343,8 +340,8 @@ bool CloseOwnPositions(const string reason)
    {
       const ulong ticket = PositionGetTicket(i);
       if(ticket == 0 || PositionGetString(POSITION_SYMBOL) != g_symbol) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
-      if(!trade.PositionClose(ticket))
+      if(PositionGetInteger(POSITION_MAGIC) != EA_MAGIC) continue;
+      if(!trade.PositionClose(ticket) || !TradeRequestExecuted())
       {
          allClosed = false;
          PrintFormat("Close failed (%s), ticket %I64u: %s", reason, ticket, trade.ResultRetcodeDescription());
@@ -396,7 +393,7 @@ bool SendEntry(const string side, const double rsi)
    if(!SymbolInfoTick(g_symbol, tick)) { g_status = "No valid live quote"; return false; }
    const double ask = tick.ask;
    const double bid = tick.bid;
-   if(pip <= 0.0 || point <= 0.0 || ask <= 0.0 || bid <= 0.0 || tick.time <= 0) { g_status = "No valid live quote"; return false; }
+   if(pip <= 0.0 || point <= 0.0 || ask <= 0.0 || bid <= 0.0 || ask < bid || tick.time <= 0) { g_status = "No valid live quote"; return false; }
    const long tickAge = (long)(TimeCurrent() - tick.time);
    if(tickAge > 30 || tickAge < -120) { g_status = "MT5 quote is stale or the terminal clock is skewed; entry blocked"; return false; }
    const double spread = (ask - bid) / pip;
@@ -411,13 +408,13 @@ bool SendEntry(const string side, const double rsi)
    const double price = isBuy ? ask : bid;
    const double sl = NormalizeDouble(isBuy ? price - stopDistance : price + stopDistance, digits);
    const double tp = NormalizeDouble(isBuy ? price + takeDistance : price - takeDistance, digits);
-   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetExpertMagicNumber(EA_MAGIC);
    trade.SetDeviationInPoints(20);
    trade.SetTypeFillingBySymbol(g_symbol);
    const bool sent = isBuy
       ? trade.Buy(lots, g_symbol, 0.0, sl, tp, "MoneyWork EMA RSI")
       : trade.Sell(lots, g_symbol, 0.0, sl, tp, "MoneyWork EMA RSI");
-   if(!sent)
+   if(!sent || !TradeRequestExecuted())
    {
       g_status = "Order rejected by MT5/broker: " + trade.ResultRetcodeDescription();
       Print(g_status);
@@ -468,25 +465,32 @@ void OnTick()
       return;
    }
 
-   ulong ticket;
-   ENUM_POSITION_TYPE positionType = POSITION_TYPE_BUY;
-   double volume, positionPnl;
-   const int ownPositions = FindOwnPosition(ticket, positionType, volume, positionPnl);
+   const int ownPositions = CountOwnPositions();
    if(ownPositions > 0)
    {
-      const double target = HARD_PROFIT_TARGET_PER_001 * volume / 0.01;
-      const bool opposite = haveSignal && ((positionType == POSITION_TYPE_BUY && signal == "SELL") || (positionType == POSITION_TYPE_SELL && signal == "BUY"));
-      if(positionPnl >= target)
+      bool closedAny = false;
+      bool closeFailed = false;
+      string exitReason = "";
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
-         if(trade.PositionClose(ticket)) g_status = StringFormat("Closed EA position at %.2f account currency target", target);
-         else g_status = "Profit-target close failed: " + trade.ResultRetcodeDescription();
+         const ulong ownedTicket = PositionGetTicket(i);
+         if(ownedTicket == 0 || PositionGetString(POSITION_SYMBOL) != g_symbol || PositionGetInteger(POSITION_MAGIC) != EA_MAGIC) continue;
+         const ENUM_POSITION_TYPE ownedType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         const double ownedVolume = PositionGetDouble(POSITION_VOLUME);
+         const double ownedPnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         const double target = HARD_PROFIT_TARGET_PER_001 * ownedVolume / 0.01;
+         const bool opposite = haveSignal && ((ownedType == POSITION_TYPE_BUY && signal == "SELL") || (ownedType == POSITION_TYPE_SELL && signal == "BUY"));
+         const bool shouldClose = ownedPnl >= target || !IsInsideSchedule() || opposite;
+         if(!shouldClose) continue;
+         if(trade.PositionClose(ownedTicket) && TradeRequestExecuted())
+         {
+            closedAny = true;
+            exitReason = ownedPnl >= target ? "closed at cash target" : !IsInsideSchedule() ? "closed outside schedule" : "closed on opposite signal";
+         }
+         else closeFailed = true;
       }
-      else if(!IsInsideSchedule() || opposite)
-      {
-         if(trade.PositionClose(ticket)) g_status = !IsInsideSchedule() ? "Closed EA position outside schedule" : "Closed EA position on opposite signal";
-         else g_status = "Protective exit failed: " + trade.ResultRetcodeDescription();
-      }
-      Comment("Money Work EA\n", g_status, "\nEA position P/L ", DoubleToString(positionPnl, 2), " / target ", DoubleToString(target, 2));
+      g_status = closeFailed ? "One or more EA position exits were rejected by MT5/broker" : closedAny ? "EA position " + exitReason : "Managing only EA-owned position(s); waiting for exit";
+      Comment("Money Work EA\n", g_status, "\nManaged position count: ", ownPositions);
       return;
    }
 
@@ -559,9 +563,9 @@ int OnInit()
       Print("Log in to an MT5 Demo account before attaching Money Work EA.");
       return INIT_FAILED;
    }
-   g_goalLatchKey = StringFormat("MWG_%I64d_%I64d", g_loginAtStart, InpMagic);
+   g_goalLatchKey = StringFormat("MWG_%I64d_%I64d", g_loginAtStart, EA_MAGIC);
    g_goalLatched = !MQLInfoInteger(MQL_TESTER) && GlobalVariableCheck(g_goalLatchKey);
-   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetExpertMagicNumber(EA_MAGIC);
    trade.SetTypeFillingBySymbol(g_symbol);
    EventSetTimer(60);
    FetchDailyReference();
