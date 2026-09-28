@@ -43,8 +43,10 @@ _state_lock = threading.RLock()
 _active_symbols: set[str] = set()
 QUOTE_POLL_INTERVAL_SECONDS = 0.1  # Poll up to 10 Hz; broker ticks may arrive less often.
 _connected = False
+_agent_armed = False
 _running = True
 _learning_cache = {"login": None, "loadedAt": 0.0, "trades": []}
+MANUAL_MAGIC = BOT_MAGIC + 1
 
 
 def emit(payload: dict) -> None:
@@ -84,7 +86,7 @@ def account_payload() -> dict:
 
 
 def connect(payload: dict) -> dict:
-    global _connected
+    global _connected, _agent_armed
     login_text = str(payload.get("login", "")).strip()
     password = str(payload.get("password", ""))
     server = str(payload.get("server", "")).strip()
@@ -102,6 +104,7 @@ def connect(payload: dict) -> dict:
         if not mt5.initialize(**kwargs):
             raise RuntimeError(f"Could not connect to MT5: {mt5.last_error()}. Check the server, account, password, and terminal path.")
         _connected = True
+        _agent_armed = False
         return account_payload()
 
 
@@ -439,14 +442,104 @@ def evaluate_agent(command: dict) -> dict:
                 "learning": "The two-second market evaluation uses the latest closed-trade record; two consecutive losses trigger a one-hour cooldown."}
 
 
+def place_manual_order(command: dict) -> dict:
+    """Place one explicitly confirmed, protected manual AUD/CAD market order."""
+    symbol = str(command.get("symbol", "")).strip()
+    side = str(command.get("side", "")).upper()
+    if not symbol or not symbol.upper().startswith("AUDCAD"):
+        raise ValueError("Manual Buy/Sell buttons are currently limited to the broker's AUDCAD symbol.")
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("Choose Buy or Sell.")
+    if command.get("confirmed") is not True:
+        raise PermissionError("Confirm the order details before placing a manual order.")
+    if _agent_armed:
+        raise PermissionError("Manual orders are disabled while the MT5 autopilot is armed. Pause the autopilot first.")
+
+    with _mt5_lock:
+        if not _connected:
+            raise RuntimeError("Connect an MT5 account before placing a manual order.")
+        account = mt5.account_info()
+        terminal = mt5.terminal_info()
+        if account is None or terminal is None:
+            raise RuntimeError(f"MT5 account or terminal is unavailable: {mt5.last_error()}")
+        live_confirmed = command.get("liveConfirmed") is True
+        if not account_mode_allowed(int(account.trade_mode), live_confirmed):
+            raise PermissionError("Manual execution is limited to MT5 Demo or a Live order explicitly confirmed with LIVE.")
+        if not bool(getattr(account, "trade_allowed", False)) or not bool(getattr(terminal, "trade_allowed", False)) or bool(getattr(terminal, "tradeapi_disabled", False)):
+            raise PermissionError("MT5 or this account has disabled algorithmic trading. Enable it in MetaTrader and reconnect.")
+
+        now = datetime.now()
+        info = mt5.symbol_info(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        if info is None or tick is None or float(tick.bid) <= 0 or float(tick.ask) <= 0:
+            raise RuntimeError(f"No valid MT5 market data is available for {symbol}.")
+        tick_time = int(getattr(tick, "time", 0))
+        tick_age = now.timestamp() - tick_time if tick_time else float("inf")
+        if not tick_time or tick_age > 30:
+            raise RuntimeError("The latest AUDCAD tick is stale; manual orders are blocked until fresh market data arrives.")
+        if tick_age < -120:
+            raise RuntimeError("The MT5 tick clock is more than two minutes ahead of this computer; sync the clocks before ordering.")
+
+        if int(getattr(info, "trade_mode", 0)) != int(getattr(mt5, "SYMBOL_TRADE_MODE_FULL", 4)):
+            raise PermissionError("AUDCAD trading is disabled or one-direction-only at this broker.")
+        positions = mt5.positions_get(symbol=symbol)
+        if positions is None:
+            raise RuntimeError(f"Could not read open positions: {mt5.last_error()}")
+        if positions:
+            raise PermissionError("One AUDCAD position already exists. Close or manage it in MT5 before opening another.")
+
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        todays_deals = mt5.history_deals_get(today, now)
+        if todays_deals is None:
+            raise RuntimeError(f"Could not read today's trade history: {mt5.last_error()}")
+        realized_pnl = sum(float(row.profit) + float(row.commission) + float(row.swap) for row in todays_deals)
+        floating_pnl = float(getattr(account, "profit", 0))
+        start_balance = float(account.balance) - realized_pnl
+        if agent_equity_goal_reached(max(float(account.balance), float(getattr(account, "equity", float(account.balance) + floating_pnl)))):
+            raise PermissionError("The 80-million account-currency balance/equity limit has been reached; no new order is allowed.")
+        if daily_loss_exceeded(start_balance, realized_pnl, floating_pnl):
+            raise PermissionError("The 1% account-wide daily-loss stop is active; no new order is allowed.")
+
+        volume = normalize_volume(info)
+        distance = pip_size(int(info.digits), float(info.point))
+        spread_pips = (float(tick.ask) - float(tick.bid)) / distance
+        if spread_pips > MAX_SPREAD_PIPS:
+            raise PermissionError(f"Spread is {spread_pips:.2f} pips; the {MAX_SPREAD_PIPS:g}-pip limit blocks this order.")
+        minimum_stop = max(int(getattr(info, "trade_stops_level", 0)), int(getattr(info, "trade_freeze_level", 0))) * float(info.point)
+        stop_distance = max(STOP_LOSS_PIPS * distance, minimum_stop)
+        take_distance = max(TAKE_PROFIT_PIPS * distance, minimum_stop)
+        is_buy = side == "BUY"
+        entry = float(tick.ask if is_buy else tick.bid)
+        digits = int(info.digits)
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": volume,
+            "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
+            "price": round(entry, digits),
+            "sl": round(entry - stop_distance if is_buy else entry + stop_distance, digits),
+            "tp": round(entry + take_distance if is_buy else entry - take_distance, digits),
+            "deviation": 20,
+            "magic": MANUAL_MAGIC,
+            "comment": f"MoneyWork manual {side}",
+            "type_time": mt5.ORDER_TIME_GTC,
+        }
+        result = _send_market_deal(request)
+        return {"state": "manual_order_placed", "side": side, "symbol": symbol, "volume": volume,
+                "entry": request["price"], "stopLoss": request["sl"], "takeProfit": request["tp"],
+                "accountCurrency": str(getattr(account, "currency", "account currency")),
+                "dailyPnl": realized_pnl + floating_pnl, "spreadPips": spread_pips, "result": result}
+
+
 def disconnect() -> None:
-    global _connected
+    global _connected, _agent_armed
     with _state_lock:
         _active_symbols.clear()
     with _mt5_lock:
         if _connected:
             mt5.shutdown()
             _connected = False
+        _agent_armed = False
 
 
 def quote_poller() -> None:
@@ -467,6 +560,7 @@ def quote_poller() -> None:
 
 
 def handle(command: dict) -> None:
+    global _agent_armed
     request_id = command.get("requestId")
     action = command.get("action")
     try:
@@ -484,6 +578,11 @@ def handle(command: dict) -> None:
             response(request_id, True, positions=get_positions())
         elif action == "agent_evaluate":
             response(request_id, True, result=evaluate_agent(command))
+        elif action == "agent_state":
+            _agent_armed = command.get("armed") is True
+            response(request_id, True, armed=_agent_armed)
+        elif action == "manual_order":
+            response(request_id, True, result=place_manual_order(command))
         elif action == "deals":
             response(request_id, True, deals=get_deals(command.get("days", 30)))
         elif action == "disconnect":

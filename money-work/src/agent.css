@@ -183,6 +183,17 @@ body { overflow:hidden; }
 /* Chart editors, draggable OHLC candles and animated analyst/agent avatars. */
 .chart-heading { align-items:center; gap:10px; }
 .chart-control-bar { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; }
+.manual-trade-actions { display:flex; align-items:center; gap:5px; }
+.manual-trade-actions button { display:inline-flex; align-items:center; gap:5px; min-height:27px; padding:5px 9px; border:1px solid; border-radius:6px; font:700 8px 'DM Sans',sans-serif; }
+.manual-trade-actions small { opacity:.75; font-size:7px; }
+.manual-buy-button { border-color:#326e58; background:#142a23; color:#8de0b5; }
+.manual-sell-button { border-color:#75484c; background:#301d22; color:#f2a8a7; }
+.manual-trade-actions button:disabled { opacity:.4; cursor:not-allowed; }
+.manual-order-preview { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:12px 0; padding:10px; border:1px solid #2c3647; border-radius:8px; background:#10151e; }
+.manual-order-preview span { display:flex; justify-content:space-between; gap:8px; color:#8997aa; font-size:9px; }
+.manual-order-preview b { color:#e5ecf6; font-size:9px; }
+.manual-order-disclaimer { color:#d4b985; font-size:9px; line-height:1.5; }
+.manual-order-status { padding:7px 9px; margin-top:7px; border:1px solid #326e58; border-radius:7px; background:#142a23; color:#9ce3bd; font-size:9px; line-height:1.4; }
 .chart-edit-tools { display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
 .chart-edit-tools > button { min-width:26px; height:25px; border:1px solid #30394a; border-radius:5px; background:#121722; color:#b4c2d6; font-size:10px; }
 .chart-edit-tools > button:hover { border-color:#6784b8; color:#fff; }

@@ -8,6 +8,7 @@ let bridge;
 let nextRequestId = 1;
 let stdoutBuffer = '';
 let bridgeDiagnostic = '';
+let agentArmed = false;
 const pending = new Map();
 const accountFile = () => path.join(app.getPath('userData'), 'mt5-account.bin');
 
@@ -201,6 +202,7 @@ ipcMain.handle('mt5:connect', async (_event, credentials) => {
     terminalPath: String(credentials.terminalPath || '').trim(),
   };
   const result = await bridgeRequest('connect', safeCredentials, 60000);
+  agentArmed = false;
   if (credentials.remember) saveCredentials(safeCredentials);
   return result.account;
 });
@@ -209,6 +211,7 @@ ipcMain.handle('mt5:connect-saved', async () => {
   const credentials = readCredentials();
   if (!credentials) throw new Error('No saved account is available on this device.');
   const result = await bridgeRequest('connect', credentials, 60000);
+  agentArmed = false;
   return result.account;
 });
 
@@ -218,6 +221,7 @@ ipcMain.handle('mt5:get-saved-account', async () => {
 });
 
 ipcMain.handle('mt5:disconnect', async () => {
+  agentArmed = false;
   if (!bridge || bridge.exitCode !== null) return true;
   await bridgeRequest('disconnect', {}, 15000);
   return true;
@@ -253,7 +257,31 @@ ipcMain.handle('mt5:deals', async (_event, days) => {
   return result.deals || [];
 });
 
+ipcMain.handle('mt5:agent-state', async (_event, armed) => {
+  const nextState = armed === true;
+  await bridgeRequest('agent_state', { armed: nextState });
+  agentArmed = nextState;
+  return { armed: agentArmed };
+});
+
+ipcMain.handle('mt5:manual-order', async (_event, payload) => {
+  if (agentArmed) throw new Error('Manual Buy/Sell is disabled while the MT5 autopilot is armed. Pause it first.');
+  if (!payload || !/^AUDCAD[A-Z0-9.+_-]*$/i.test(String(payload.symbol || ''))) {
+    throw new Error('Manual Buy/Sell is currently limited to the broker AUDCAD symbol.');
+  }
+  if (!['BUY', 'SELL'].includes(String(payload.side || '').toUpperCase())) throw new Error('Choose Buy or Sell.');
+  if (payload.confirmed !== true) throw new Error('Confirm the order details before placing a manual order.');
+  const result = await bridgeRequest('manual_order', {
+    symbol: String(payload.symbol),
+    side: String(payload.side).toUpperCase(),
+    confirmed: true,
+    liveConfirmed: payload.liveConfirmed === true,
+  }, 20000);
+  return result.result;
+});
+
 ipcMain.handle('mt5:agent-evaluate', async (_event, payload) => {
+  if (!agentArmed) throw new Error('The MT5 autopilot is not armed in Money Work.');
   if (!payload || !/^AUDCAD[A-Z0-9.+_-]*$/i.test(String(payload.symbol || ''))) {
     throw new Error('The automatic agent is restricted to the broker AUDCAD symbol.');
   }

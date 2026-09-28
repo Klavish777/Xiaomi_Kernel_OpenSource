@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('moneyWork', {
   getMt5History: (symbol, timeframe, count = 2000) => ipcRenderer.invoke('mt5:history', symbol, timeframe, count),
   getMt5Positions: () => ipcRenderer.invoke('mt5:positions'),
   getMt5Deals: (days) => ipcRenderer.invoke('mt5:deals', days),
+  setMt5AgentArmed: (armed) => ipcRenderer.invoke('mt5:agent-state', armed === true),
+  placeMt5ManualOrder: (payload) => ipcRenderer.invoke('mt5:manual-order', payload),
   evaluateMt5Agent: (payload) => ipcRenderer.invoke('mt5:agent-evaluate', payload),
   onMt5Event: (callback) => {
     const listener = (_event, payload) => callback(payload);

@@ -112,6 +112,7 @@ class BridgeAgentTests(unittest.TestCase):
         FAKE_MT5.requests = []
         FAKE_MT5.rate_requests = []
         bridge._connected = True
+        bridge._agent_armed = False
         bridge._learning_cache.update({'login': None, 'loadedAt': 0.0, 'trades': []})
 
     def test_account_snapshot_reads_updated_balance_equity_and_terminal_permissions(self):
@@ -151,6 +152,75 @@ class BridgeAgentTests(unittest.TestCase):
         self.assertGreater(request['tp'], request['price'])
         self.assertAlmostEqual(request['price'] - request['sl'], 0.002)
         self.assertAlmostEqual(request['tp'] - request['price'], 0.003)
+
+    def test_manual_buy_and_sell_are_confirmed_capped_and_have_broker_sl_tp(self):
+        buy = bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        request = FAKE_MT5.requests[0]
+        self.assertEqual(buy['state'], 'manual_order_placed')
+        self.assertEqual(buy['volume'], 0.01)
+        self.assertEqual(request['magic'], bridge.MANUAL_MAGIC)
+        self.assertEqual(request['type'], FAKE_MT5.ORDER_TYPE_BUY)
+        self.assertLess(request['sl'], request['price'])
+        self.assertGreater(request['tp'], request['price'])
+        self.assertAlmostEqual(request['price'] - request['sl'], 0.002)
+        self.assertAlmostEqual(request['tp'] - request['price'], 0.003)
+
+        FAKE_MT5.requests = []
+        sell = bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'SELL', 'confirmed': True})
+        request = FAKE_MT5.requests[0]
+        self.assertEqual(sell['state'], 'manual_order_placed')
+        self.assertEqual(request['type'], FAKE_MT5.ORDER_TYPE_SELL)
+        self.assertGreater(request['sl'], request['price'])
+        self.assertLess(request['tp'], request['price'])
+
+    def test_manual_orders_require_agent_off_user_confirmation_and_live_confirmation(self):
+        bridge._agent_armed = True
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        bridge._agent_armed = False
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': False})
+        FAKE_MT5.account.trade_mode = 2
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True, 'liveConfirmed': False})
+        result = bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True, 'liveConfirmed': True})
+        self.assertEqual(result['state'], 'manual_order_placed')
+
+    def test_manual_order_obeys_symbol_position_volume_daily_loss_and_equity_guards(self):
+        with self.assertRaises(ValueError):
+            bridge.place_manual_order({'symbol': 'EURUSD', 'side': 'BUY', 'confirmed': True})
+        FAKE_MT5.positions = [SimpleNamespace(symbol='AUDCAD', magic=99)]
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'SELL', 'confirmed': True})
+        FAKE_MT5.positions = []
+        FAKE_MT5.symbol.volume_min = 0.02
+        with self.assertRaises(ValueError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        FAKE_MT5.symbol.volume_min = 0.01
+        FAKE_MT5.account.balance = 80_000_000
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        FAKE_MT5.account.balance = 9900
+        FAKE_MT5.deals = [SimpleNamespace(profit=-100, commission=0, swap=0)]
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        self.assertEqual(FAKE_MT5.requests, [])
+
+    def test_manual_orders_fail_closed_on_terminal_permission_stale_quote_or_spread(self):
+        FAKE_MT5.terminal.tradeapi_disabled = True
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        FAKE_MT5.terminal.tradeapi_disabled = False
+        FAKE_MT5.tick.time = int(datetime.now().timestamp()) - 60
+        with self.assertRaises(RuntimeError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        FAKE_MT5.tick.time = int(datetime.now().timestamp())
+        FAKE_MT5.tick.ask = 0.90060
+        with self.assertRaises(PermissionError):
+            bridge.place_manual_order({'symbol': 'AUDCAD', 'side': 'BUY', 'confirmed': True})
+        self.assertEqual(FAKE_MT5.requests, [])
 
     def test_80_million_equity_goal_closes_bot_position_and_latches_stop_state(self):
         FAKE_MT5.account = SimpleNamespace(trade_mode=0, trade_allowed=True, balance=80_000_000,

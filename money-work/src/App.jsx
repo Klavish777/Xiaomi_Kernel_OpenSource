@@ -190,6 +190,11 @@ function App() {
   const [liveTradeConfirmed, setLiveTradeConfirmed] = useState(false);
   const [liveConfirmText, setLiveConfirmText] = useState('');
   const [brokerAgentStatus, setBrokerAgentStatus] = useState(null);
+  const [manualOrderSide, setManualOrderSide] = useState('');
+  const [manualConfirmText, setManualConfirmText] = useState('');
+  const [manualOrderBusy, setManualOrderBusy] = useState(false);
+  const [manualOrderError, setManualOrderError] = useState('');
+  const [manualOrderMessage, setManualOrderMessage] = useState('');
   const [referenceData, setReferenceData] = useState(readReference);
   const [technicalAgentEnabled, setTechnicalAgentEnabled] = useState(() => localStorage.getItem(TECHNICAL_AGENT_STORAGE_KEY) !== 'false');
   const [researchRunning, setResearchRunning] = useState(false);
@@ -427,6 +432,14 @@ function App() {
       referenceData: researchRunning ? referenceData : null,
       brokerStatus: brokerAgentStatus,
     }), [analysis, liveQuote, referenceData, brokerAgentStatus, technicalAgentEnabled, researchRunning]);
+  const manualOrderDisabled = !window.moneyWork?.placeMt5ManualOrder
+    || !mt5Account
+    || !['demo', 'real'].includes(mt5Account.accountType)
+    || !/^AUDCAD[A-Z0-9.+_-]*$/i.test(selectedSymbol)
+    || agentEnabled
+    || mt5Account.algorithmicTradingAllowed === false
+    || !liveQuote
+    || !analystConsensus.analysts.market.ready;
 
   async function fetchDailyReference(url, normalize = (payload) => payload) {
     const controller = new AbortController();
@@ -548,6 +561,14 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem(AGENT_SCHEDULE_STORAGE_KEY, JSON.stringify(agentSchedule)); } catch { /* persistent browser storage may be unavailable */ }
   }, [agentSchedule]);
+
+  useEffect(() => {
+    if (!mt5Account || !window.moneyWork?.setMt5AgentArmed) return;
+    window.moneyWork.setMt5AgentArmed(agentEnabled).catch((error) => {
+      setMt5Error(error.message || String(error));
+      if (agentEnabled) setAgentEnabled(false);
+    });
+  }, [agentEnabled, accountIdentity]);
 
   useEffect(() => {
     if (!agentEnabled || !mt5Account || !window.moneyWork || !liveQuote || !analysis || brokerGoalReached) return;
@@ -708,7 +729,61 @@ function App() {
     }
   }
 
-  function startOrPauseAgent() {
+  function requestManualOrder(side) {
+    if (agentEnabled) {
+      setMt5Error(l('Сначала остановите автопилот, чтобы торговать вручную.', 'Pause the autopilot before placing a manual trade.'));
+      return;
+    }
+    if (!mt5Account || !['demo', 'real'].includes(mt5Account.accountType)) {
+      setMt5Error(l('Сначала подключите MT5 Demo или Live.', 'Connect an MT5 Demo or Live account first.'));
+      setModal('connect');
+      return;
+    }
+    if (!/^AUDCAD[A-Z0-9.+_-]*$/i.test(selectedSymbol)) {
+      setMt5Error(l('Кнопки Buy/Sell сейчас доступны только для символа AUDCAD вашего брокера.', 'Manual Buy/Sell is currently limited to your broker’s AUDCAD symbol.'));
+      return;
+    }
+    if (!window.moneyWork?.placeMt5ManualOrder) {
+      setMt5Error(l('Ручные ордера доступны только в установленном приложении Windows.', 'Manual orders are available only in the installed Windows app.'));
+      return;
+    }
+    if (!liveQuote || !analystConsensus.analysts.market.ready) {
+      setMt5Error(l('Нет свежей котировки MT5; ордер не отправлен.', 'No fresh MT5 quote; no order was sent.'));
+      return;
+    }
+    setManualOrderSide(side);
+    setManualConfirmText('');
+    setManualOrderError('');
+    setManualOrderMessage('');
+    setModal('manual-order-confirmation');
+  }
+
+  async function confirmManualOrder() {
+    if (!manualOrderSide || !mt5Account || manualOrderBusy) return;
+    const liveConfirmed = mt5Account.accountType === 'real' && manualConfirmText.trim() === 'LIVE';
+    if (mt5Account.accountType === 'real' && !liveConfirmed) return;
+    setManualOrderBusy(true);
+    setManualOrderError('');
+    try {
+      const result = await window.moneyWork.placeMt5ManualOrder({
+        symbol: selectedSymbol,
+        side: manualOrderSide,
+        confirmed: true,
+        liveConfirmed,
+      });
+      const currency = result.accountCurrency || mt5Account.currency || '';
+      setManualOrderMessage(`${result.side} ${result.symbol} · ${Number(result.volume).toFixed(2)} lot · ${Number(result.entry).toFixed(5)} · SL ${Number(result.stopLoss).toFixed(5)} · TP ${Number(result.takeProfit).toFixed(5)} ${currency}`);
+      setModal('');
+      refreshPositionsNow();
+      refreshDealsNow();
+    } catch (error) {
+      setManualOrderError(error.message || String(error));
+    } finally {
+      setManualOrderBusy(false);
+    }
+  }
+
+  async function startOrPauseAgent() {
     if (agentEnabled) {
       setAgentEnabled(false);
       if (mt5Account?.accountType === 'real') setLiveTradeConfirmed(false);
@@ -865,10 +940,11 @@ function App() {
               </article>
             </section>
             <article className="panel chart-panel dashboard-chart">
-              <div className="panel-heading chart-heading"><div className="instrument-title"><div className="pair-icon">{selectedSymbol.slice(0, 2)}</div><div><div className="pair-name">{selectedSymbol}</div><span>{liveQuote ? `${l('Живой поток MT5', 'Live MT5 feed')}${quoteCadenceBySymbol[selectedSymbol] ? ` · ~${quoteCadenceBySymbol[selectedSymbol].averageMs} ms ${l('между тиками', 'between ticks')} · ${quoteCadenceBySymbol[selectedSymbol].sampleCount} ${l('интервалов', 'interval samples')}` : ` · ${l('измерение частоты тиков…', 'measuring tick cadence…')}`}` : l('Ожидание котировок MT5', 'Waiting for MT5 quotes')}</span></div></div><div className="chart-control-bar"><div className="timeframe-switcher">{['1M', '5M', '15M', '1H'].map((frame) => <button key={frame} onClick={() => { setTimeframe(frame); setOlderBarsOffset(0); }} className={timeframe === frame ? 'selected' : ''}>{frame}</button>)}</div><div className="chart-edit-tools"><button title={l('Показать более ранние свечи', 'Show older candles')} onClick={() => shiftChart(Math.max(5, Math.round(visibleBarCount * 0.65)))}>←</button><button title={l('Показать более новые свечи', 'Show newer candles')} onClick={() => shiftChart(-Math.max(5, Math.round(visibleBarCount * 0.65)))}>→</button><button title={l('Увеличить масштаб', 'Zoom in')} onClick={() => setVisibleBarCount((count) => Math.max(20, count - 10))}>−</button><button title={l('Уменьшить масштаб', 'Zoom out')} onClick={() => setVisibleBarCount((count) => Math.min(240, count + 10))}>＋</button><select aria-label={l('Стиль графика', 'Chart style')} value={chartStyle} onChange={(event) => setChartStyle(event.target.value)}><option value="candles">{l('Свечи', 'Candles')}</option><option value="line">{l('Линия', 'Line')}</option></select><label className="ma-editor"><input type="checkbox" checked={showMovingAverage} onChange={(event) => setShowMovingAverage(event.target.checked)} /><select aria-label={l('Тип средней скользящей', 'Moving average type')} value={movingAverageType} onChange={(event) => setMovingAverageType(event.target.value)}><option>SMA</option><option>EMA</option></select><input aria-label={l('Период средней скользящей', 'Moving average period')} type="number" min="2" max="200" value={movingAveragePeriod} onChange={(event) => setMovingAveragePeriod(Math.max(2, Math.min(200, Number(event.target.value) || 2)))} /></label></div></div></div>
+              <div className="panel-heading chart-heading"><div className="instrument-title"><div className="pair-icon">{selectedSymbol.slice(0, 2)}</div><div><div className="pair-name">{selectedSymbol}</div><span>{liveQuote ? `${l('Живой поток MT5', 'Live MT5 feed')}${quoteCadenceBySymbol[selectedSymbol] ? ` · ~${quoteCadenceBySymbol[selectedSymbol].averageMs} ms ${l('между тиками', 'between ticks')} · ${quoteCadenceBySymbol[selectedSymbol].sampleCount} ${l('интервалов', 'interval samples')}` : ` · ${l('измерение частоты тиков…', 'measuring tick cadence…')}`}` : l('Ожидание котировок MT5', 'Waiting for MT5 quotes')}</span></div></div><div className="chart-control-bar"><div className="manual-trade-actions"><button className="manual-buy-button" type="button" disabled={manualOrderDisabled} onClick={() => requestManualOrder('BUY')} title={l('Открыть BUY 0,01 лота; требуется подтверждение', 'Open BUY 0.01 lot; confirmation required')}>BUY <small>0.01</small></button><button className="manual-sell-button" type="button" disabled={manualOrderDisabled} onClick={() => requestManualOrder('SELL')} title={l('Открыть SELL 0,01 лота; требуется подтверждение', 'Open SELL 0.01 lot; confirmation required')}>SELL <small>0.01</small></button></div><div className="timeframe-switcher">{['1M', '5M', '15M', '1H'].map((frame) => <button key={frame} onClick={() => { setTimeframe(frame); setOlderBarsOffset(0); }} className={timeframe === frame ? 'selected' : ''}>{frame}</button>)}</div><div className="chart-edit-tools"><button title={l('Показать более ранние свечи', 'Show older candles')} onClick={() => shiftChart(Math.max(5, Math.round(visibleBarCount * 0.65)))}>←</button><button title={l('Показать более новые свечи', 'Show newer candles')} onClick={() => shiftChart(-Math.max(5, Math.round(visibleBarCount * 0.65)))}>→</button><button title={l('Увеличить масштаб', 'Zoom in')} onClick={() => setVisibleBarCount((count) => Math.max(20, count - 10))}>−</button><button title={l('Уменьшить масштаб', 'Zoom out')} onClick={() => setVisibleBarCount((count) => Math.min(240, count + 10))}>＋</button><select aria-label={l('Стиль графика', 'Chart style')} value={chartStyle} onChange={(event) => setChartStyle(event.target.value)}><option value="candles">{l('Свечи', 'Candles')}</option><option value="line">{l('Линия', 'Line')}</option></select><label className="ma-editor"><input type="checkbox" checked={showMovingAverage} onChange={(event) => setShowMovingAverage(event.target.checked)} /><select aria-label={l('Тип средней скользящей', 'Moving average type')} value={movingAverageType} onChange={(event) => setMovingAverageType(event.target.value)}><option>SMA</option><option>EMA</option></select><input aria-label={l('Период средней скользящей', 'Moving average period')} type="number" min="2" max="200" value={movingAveragePeriod} onChange={(event) => setMovingAveragePeriod(Math.max(2, Math.min(200, Number(event.target.value) || 2)))} /></label></div></div></div>
               <div className="price-row"><strong>{liveQuote ? Number(liveQuote.bid).toFixed(5) : '—'}</strong><span className="price-change">{liveQuote ? 'LIVE' : l('НЕТ ДАННЫХ', 'NO DATA')}</span>{liveQuote && <span className="price-meta">Bid {Number(liveQuote.bid).toFixed(5)} · Ask {Number(liveQuote.ask).toFixed(5)}</span>}</div>
               {visibleChartBars.length ? <div className="chart-wrap chart-pan-area" onPointerDown={handleChartPointerDown} onPointerMove={handleChartPointerMove} onPointerUp={endChartPointer} onPointerCancel={endChartPointer} onWheel={handleChartWheel} title={l('Перетаскивайте график, прокручивайте для перемещения по истории', 'Drag the chart or scroll to pan through history')}><PricePlot bars={visibleChartBars} symbol={selectedSymbol} style={chartStyle} period={movingAveragePeriod} averageType={movingAverageType} showAverage={showMovingAverage} /></div> : <div className="empty-chart"><Activity size={22} /><strong>{l('График пока пуст', 'No chart data yet')}</strong><span>{mt5Account ? l('Выберите доступный символ на вкладке «Рынки».', 'Choose a broker symbol on the Markets tab.') : l('Подключите демо- или live-счёт MT5, чтобы загрузить рынки.', 'Connect an MT5 demo or live account to load markets.')}</span></div>}
               <div className="chart-foot"><span><i className="legend-dot blue-dot" />{liveQuote ? l('Котировка обновляется через MT5', 'Quote received from MT5') : l('Демо-данные не подставляются', 'No sample prices are shown')}</span><span>{liveQuote ? new Date((liveQuote.time || Date.now() / 1000) * 1000).toLocaleTimeString() : '—'}</span></div>
+              {manualOrderMessage && <div className="manual-order-status" role="status">{manualOrderMessage}</div>}
             </article>
           </>}
 
@@ -942,7 +1018,16 @@ function App() {
         <div className={`modal-card ${modal === 'connect' ? 'account-modal' : ''}`}>
           <button className="modal-close" onClick={() => setModal('')}><X size={17} /></button>
           <div className="modal-icon"><LockKeyhole size={20} /></div>
-          {modal === 'connect' ? <>
+          {modal === 'manual-order-confirmation' ? <>
+            <span className="section-kicker">MANUAL MT5 ORDER · AUDCAD</span>
+            <h2>{manualOrderSide === 'BUY' ? l('Подтвердить покупку', 'Confirm Buy') : l('Подтвердить продажу', 'Confirm Sell')}</h2>
+            <p>{l('Будет отправлен один рыночный ордер на 0,01 лота по актуальной котировке MT5. К ордеру прикрепляются SL 20 и TP 30 пипсов; действует лимит спреда 5 пипсов и запрет при дневном стопе/лимите счёта. Проскальзывание и убыток возможны.', 'This sends one 0.01-lot market order using the latest MT5 quote. It includes a 20-pip SL and 30-pip TP and is blocked by the 5-pip spread, daily-loss and account-cap checks. Slippage and losses remain possible.')}</p>
+            <div className="manual-order-preview"><span>{l('Сторона', 'Side')}<b className={manualOrderSide === 'BUY' ? 'positive-text' : 'negative-text'}>{manualOrderSide}</b></span><span>{l('Символ', 'Symbol')}<b>{selectedSymbol}</b></span><span>{l('Объём', 'Volume')}<b>0.01 lot</b></span><span>{l('Котировка', 'Quote')}<b>{manualOrderSide === 'BUY' ? Number(liveQuote?.ask || 0).toFixed(5) : Number(liveQuote?.bid || 0).toFixed(5)}</b></span></div>
+            <p className="manual-order-disclaimer">{l('Это ручная сделка. Автопилот должен быть выключен и не будет управлять этой позицией; серверные SL/TP остаются у брокера. Для каждой сделки на MT5 Live введите LIVE.', 'This is a manual trade. The autopilot must be off and will not manage this position; broker-side SL/TP remain attached. Type LIVE for every MT5 Live order.')}</p>
+            {mt5Account?.accountType === 'real' && <label className="live-confirm-field">{l('Введите LIVE для подтверждения этой реальной сделки', 'Type LIVE to confirm this real-money order')}<input autoComplete="off" value={manualConfirmText} onChange={(event) => setManualConfirmText(event.target.value)} /></label>}
+            {manualOrderError && <div className="connection-error" role="alert">{manualOrderError}</div>}
+            <div className="modal-actions"><button className="modal-secondary" type="button" disabled={manualOrderBusy} onClick={() => { setManualOrderSide(''); setManualOrderError(''); setModal(''); }}>{l('Отмена', 'Cancel')}</button><button className="modal-primary" type="button" disabled={manualOrderBusy || (mt5Account?.accountType === 'real' && manualConfirmText.trim() !== 'LIVE')} onClick={confirmManualOrder}>{manualOrderBusy ? l('Отправка…', 'Sending…') : l(`Подтвердить ${manualOrderSide}`, `Confirm ${manualOrderSide}`)}</button></div>
+          </> : modal === 'connect' ? <>
             <span className="section-kicker">MT5 CONNECTION · GUARDED AUTO TRADING</span>
             <h2>{mt5Account ? 'Account connected' : t('Add MT5 account')}</h2>
             {mt5Account ? <>
