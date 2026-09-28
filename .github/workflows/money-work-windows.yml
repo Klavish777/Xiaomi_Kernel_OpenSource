@@ -146,6 +146,45 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  prepare-demo-candidate:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/arena/01a0dce0-xiaomi-kernel-opensource' }}
+    needs: windows-installer
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tested branch
+        uses: actions/checkout@v7
+
+      - name: Download the installer from the successful test/build job
+        uses: actions/download-artifact@v8
+        with:
+          name: Money-Work-Windows-Installer-${{ github.run_id }}
+          path: money-work/release
+
+      - name: Create or refresh an unpublished Demo-test draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content money-work/VERSION -Raw).Trim()
+          $package = (Get-Content money-work/package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne $package) { throw "VERSION ($version) differs from package.json ($package)" }
+          if ($version -notmatch '^\d+\.\d+\.\d+-rc\.\d+$') { Write-Host "Not an RC version; draft creation skipped."; exit 0 }
+          $tag = "money-work-v$version"
+          $installer = "money-work/release/Money-Work-Setup-$version.exe"
+          if (!(Test-Path $installer)) { throw "Tested installer artifact is missing: $installer" }
+          $existingJson = gh release view $tag --json isDraft,isPrerelease 2>$null
+          $viewExit = $LASTEXITCODE
+          if ($viewExit -eq 0) {
+            $existing = ($existingJson | ConvertFrom-Json)
+            if (!$existing.isDraft -or !$existing.isPrerelease) { throw "Refusing to overwrite a published release: $tag" }
+            gh release upload $tag $installer --clobber
+          } else {
+            gh release create $tag $installer --title "Money Work v$version · MT5 Demo candidate" --notes "UNPUBLISHED DRAFT for the account owner to verify on an MT5 Demo terminal. Not a stable release. The 0.01-lot maximum, explicit per-order Live confirmation, protective SL/TP, daily-loss stop, 80-million account-currency balance/equity stop, and terminal Algo Trading restrictions remain in force. Manual BUY/SELL orders require confirmation and remain user-managed." --draft --prerelease --target $env:GITHUB_SHA
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not create or refresh the unpublished Demo-test draft." }
+
   publish-release:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && inputs.verified_demo }}
     needs: windows-installer

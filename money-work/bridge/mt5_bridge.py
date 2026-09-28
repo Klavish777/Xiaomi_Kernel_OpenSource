@@ -252,6 +252,31 @@ def _send_market_deal(request: dict) -> dict:
             "deal": int(getattr(last_result, "deal", 0)), "comment": str(getattr(last_result, "comment", ""))}
 
 
+def _protected_market_order_request(symbol: str, side: str, volume: float, tick, info, magic: int, comment: str) -> dict:
+    is_buy = str(side).upper() == "BUY"
+    if not is_buy and str(side).upper() != "SELL":
+        raise ValueError("Choose Buy or Sell.")
+    distance = pip_size(int(info.digits), float(info.point))
+    minimum_stop = max(int(getattr(info, "trade_stops_level", 0)), int(getattr(info, "trade_freeze_level", 0))) * float(info.point)
+    stop_distance = max(STOP_LOSS_PIPS * distance, minimum_stop)
+    take_distance = max(TAKE_PROFIT_PIPS * distance, minimum_stop)
+    entry = float(tick.ask if is_buy else tick.bid)
+    digits = int(info.digits)
+    return {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
+        "price": round(entry, digits),
+        "sl": round(entry - stop_distance if is_buy else entry + stop_distance, digits),
+        "tp": round(entry + take_distance if is_buy else entry - take_distance, digits),
+        "deviation": 20,
+        "magic": magic,
+        "comment": comment,
+        "type_time": mt5.ORDER_TIME_GTC,
+    }
+
+
 def _close_bot_position(position, symbol: str, tick, info) -> dict:
     is_buy = int(position.type) == int(mt5.POSITION_TYPE_BUY)
     request = {
@@ -413,29 +438,10 @@ def evaluate_agent(command: dict) -> dict:
         if spread_pips > MAX_SPREAD_PIPS:
             return {"state": "spread_filter", "spreadPips": spread_pips, "dailyPnl": daily_pnl,
                     "closedTrades": len(closed_trades), "winRate": win_rate}
-        minimum_stop = max(int(getattr(info, "trade_stops_level", 0)), int(getattr(info, "trade_freeze_level", 0))) * float(info.point)
-        stop_distance = max(STOP_LOSS_PIPS * distance, minimum_stop)
-        take_distance = max(TAKE_PROFIT_PIPS * distance, minimum_stop)
-        is_buy = effective_signal == "WATCH BUY"
-        entry = float(tick.ask if is_buy else tick.bid)
-        sl = entry - stop_distance if is_buy else entry + stop_distance
-        tp = entry + take_distance if is_buy else entry - take_distance
-        digits = int(info.digits)
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": volume,
-            "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
-            "price": round(entry, digits),
-            "sl": round(sl, digits),
-            "tp": round(tp, digits),
-            "deviation": 20,
-            "magic": BOT_MAGIC,
-            "comment": "MoneyWork EMA RSI agent",
-            "type_time": mt5.ORDER_TIME_GTC,
-        }
+        side = "BUY" if effective_signal == "WATCH BUY" else "SELL"
+        request = _protected_market_order_request(symbol, side, volume, tick, info, BOT_MAGIC, "MoneyWork EMA RSI agent")
         result = _send_market_deal(request)
-        return {"state": "position_opened", "side": "BUY" if is_buy else "SELL", "symbol": symbol,
+        return {"state": "position_opened", "side": side, "symbol": symbol,
                 "volume": volume, "entry": request["price"], "stopLoss": request["sl"], "takeProfit": request["tp"],
                 "result": result, "dailyPnl": daily_pnl, "dailyLossLimit": round(start_balance * MAX_DAILY_LOSS_RATIO, 2),
                 "closedTrades": len(closed_trades), "winRate": win_rate, "consecutiveLosses": consecutive_losses,
@@ -505,25 +511,7 @@ def place_manual_order(command: dict) -> dict:
         spread_pips = (float(tick.ask) - float(tick.bid)) / distance
         if spread_pips > MAX_SPREAD_PIPS:
             raise PermissionError(f"Spread is {spread_pips:.2f} pips; the {MAX_SPREAD_PIPS:g}-pip limit blocks this order.")
-        minimum_stop = max(int(getattr(info, "trade_stops_level", 0)), int(getattr(info, "trade_freeze_level", 0))) * float(info.point)
-        stop_distance = max(STOP_LOSS_PIPS * distance, minimum_stop)
-        take_distance = max(TAKE_PROFIT_PIPS * distance, minimum_stop)
-        is_buy = side == "BUY"
-        entry = float(tick.ask if is_buy else tick.bid)
-        digits = int(info.digits)
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": volume,
-            "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
-            "price": round(entry, digits),
-            "sl": round(entry - stop_distance if is_buy else entry + stop_distance, digits),
-            "tp": round(entry + take_distance if is_buy else entry - take_distance, digits),
-            "deviation": 20,
-            "magic": MANUAL_MAGIC,
-            "comment": f"MoneyWork manual {side}",
-            "type_time": mt5.ORDER_TIME_GTC,
-        }
+        request = _protected_market_order_request(symbol, side, volume, tick, info, MANUAL_MAGIC, f"MoneyWork manual {side}")
         result = _send_market_deal(request)
         return {"state": "manual_order_placed", "side": side, "symbol": symbol, "volume": volume,
                 "entry": request["price"], "stopLoss": request["sl"], "takeProfit": request["tp"],
