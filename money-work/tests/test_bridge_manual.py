@@ -137,7 +137,8 @@ class ManualBridgeTests(unittest.TestCase):
         self.assertEqual(request['type'], FAKE_MT5.ORDER_TYPE_SELL)
         self.assertEqual(request['price'], FAKE_MT5.tick.bid)
         self.assertEqual(request['magic'], 42)
-        self.assertIn('confirmed manual close', request['comment'])
+        self.assertIn('manual close', request['comment'])
+        self.assertLessEqual(len(request['comment']), 31)
 
     def test_position_close_requires_confirmation_live_phrase_and_terminal_permission(self):
         FAKE_MT5.positions = [SimpleNamespace(

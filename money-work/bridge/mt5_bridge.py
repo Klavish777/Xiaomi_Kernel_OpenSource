@@ -390,7 +390,7 @@ def close_open_position(command: dict) -> dict:
                 or not int(getattr(tick, "time", 0) or 0)):
             raise RuntimeError(f"No valid MT5 closing quote is available for {position.symbol}.")
 
-        result = _close_manual_position(position, tick, "MoneyWork confirmed manual close")
+        result = _close_manual_position(position, tick, "MoneyWork manual close")
         return {
             "state": "position_closed",
             "ticket": ticket,
