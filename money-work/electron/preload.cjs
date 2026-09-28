@@ -1,16 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('moneyWork', {
-  openMt5Download: () => ipcRenderer.invoke('external:open-mt5-download'),
-  getBankOfCanadaReference: () => ipcRenderer.invoke('reference:bank-of-canada'),
-  openAppRelease: (version) => ipcRenderer.invoke('external:open-app-release', version),
-  openBybitMt5Guide: () => ipcRenderer.invoke('external:open-bybit-mt5-guide'),
-  toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
-  onFullscreenChange: (callback) => {
-    const listener = (_event, isFullScreen) => callback(isFullScreen);
-    ipcRenderer.on('window:fullscreen', listener);
-    return () => ipcRenderer.removeListener('window:fullscreen', listener);
-  },
   connectMt5: (credentials) => ipcRenderer.invoke('mt5:connect', credentials),
   connectSavedMt5: () => ipcRenderer.invoke('mt5:connect-saved'),
   getSavedMt5Account: () => ipcRenderer.invoke('mt5:get-saved-account'),
@@ -18,12 +8,8 @@ contextBridge.exposeInMainWorld('moneyWork', {
   searchMt5Symbols: (query) => ipcRenderer.invoke('mt5:symbols', query),
   subscribeMt5Symbol: (symbol) => ipcRenderer.invoke('mt5:subscribe', symbol),
   getMt5Account: () => ipcRenderer.invoke('mt5:account'),
-  getMt5History: (symbol, timeframe, count = 2000) => ipcRenderer.invoke('mt5:history', symbol, timeframe, count),
-  getMt5Positions: () => ipcRenderer.invoke('mt5:positions'),
-  getMt5Deals: (days) => ipcRenderer.invoke('mt5:deals', days),
-  setMt5AgentArmed: (armed) => ipcRenderer.invoke('mt5:agent-state', armed === true),
+  getMt5History: (symbol, count = 2000) => ipcRenderer.invoke('mt5:history', symbol, count),
   placeMt5ManualOrder: (payload) => ipcRenderer.invoke('mt5:manual-order', payload),
-  evaluateMt5Agent: (payload) => ipcRenderer.invoke('mt5:agent-evaluate', payload),
   onMt5Event: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('mt5:event', listener);

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, net, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -8,7 +8,6 @@ let bridge;
 let nextRequestId = 1;
 let stdoutBuffer = '';
 let bridgeDiagnostic = '';
-let agentArmed = false;
 const pending = new Map();
 const accountFile = () => path.join(app.getPath('userData'), 'mt5-account.bin');
 
@@ -127,16 +126,20 @@ function readCredentials() {
   return JSON.parse(safeStorage.decryptString(fs.readFileSync(file)));
 }
 
+function forgetCredentials() {
+  const file = accountFile();
+  if (fs.existsSync(file)) fs.unlinkSync(file);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1520,
-    height: 980,
-    minWidth: 1120,
-    minHeight: 760,
+    width: 1440,
+    height: 900,
+    minWidth: 420,
+    minHeight: 360,
     backgroundColor: '#090b11',
     title: 'Money Work',
     autoHideMenuBar: true,
-    fullscreen: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -144,49 +147,9 @@ function createWindow() {
       sandbox: true,
     },
   });
-  mainWindow.on('enter-full-screen', () => mainWindow.webContents.send('window:fullscreen', true));
-  mainWindow.on('leave-full-screen', () => mainWindow.webContents.send('window:fullscreen', false));
-  mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown') return;
-    if (input.key === 'F11') {
-      event.preventDefault();
-      mainWindow.setFullScreen(!mainWindow.isFullScreen());
-    } else if (input.key === 'Escape' && mainWindow.isFullScreen()) {
-      mainWindow.setFullScreen(false);
-    }
-  });
   if (!app.isPackaged) mainWindow.loadURL('http://127.0.0.1:5173');
   else mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
-
-ipcMain.handle('reference:bank-of-canada', async () => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
-  try {
-    const response = await net.fetch('https://www.bankofcanada.ca/valet/observations/FXAUDCAD/json?recent=1', {
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`Bank of Canada returned HTTP ${response.status}.`);
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-});
-
-ipcMain.handle('external:open-mt5-download', async () => shell.openExternal('https://www.metatrader5.com/en/download'));
-ipcMain.handle('external:open-app-release', async (_event, version) => {
-  const safeVersion = String(version || '');
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(safeVersion)) throw new Error('Invalid Money Work release version.');
-  return shell.openExternal(`https://github.com/Klavish777/Xiaomi_Kernel_OpenSource/releases/tag/money-work-v${safeVersion}`);
-});
-ipcMain.handle('external:open-bybit-mt5-guide', async () => shell.openExternal('https://www.bybit.com/en/help-center/article/How-to-Get-Started-with-MT5-CFD-Account'));
-
-ipcMain.handle('window:toggle-fullscreen', () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return false;
-  mainWindow.setFullScreen(!mainWindow.isFullScreen());
-  return mainWindow.isFullScreen();
-});
 
 ipcMain.handle('mt5:connect', async (_event, credentials) => {
   if (!credentials || !credentials.login || !credentials.password || !credentials.server) {
@@ -202,8 +165,8 @@ ipcMain.handle('mt5:connect', async (_event, credentials) => {
     terminalPath: String(credentials.terminalPath || '').trim(),
   };
   const result = await bridgeRequest('connect', safeCredentials, 60000);
-  agentArmed = false;
   if (credentials.remember) saveCredentials(safeCredentials);
+  else forgetCredentials();
   return result.account;
 });
 
@@ -211,7 +174,6 @@ ipcMain.handle('mt5:connect-saved', async () => {
   const credentials = readCredentials();
   if (!credentials) throw new Error('No saved account is available on this device.');
   const result = await bridgeRequest('connect', credentials, 60000);
-  agentArmed = false;
   return result.account;
 });
 
@@ -221,7 +183,6 @@ ipcMain.handle('mt5:get-saved-account', async () => {
 });
 
 ipcMain.handle('mt5:disconnect', async () => {
-  agentArmed = false;
   if (!bridge || bridge.exitCode !== null) return true;
   await bridgeRequest('disconnect', {}, 15000);
   return true;
@@ -242,30 +203,12 @@ ipcMain.handle('mt5:subscribe', async (_event, symbol) => {
   return result.quote;
 });
 
-ipcMain.handle('mt5:history', async (_event, symbol, timeframe, count) => {
-  const result = await bridgeRequest('history', { symbol: String(symbol || ''), timeframe: String(timeframe || '15M'), count: Number(count) || 2000 });
+ipcMain.handle('mt5:history', async (_event, symbol, count) => {
+  const result = await bridgeRequest('history', { symbol: String(symbol || ''), count: Number(count) || 2000 });
   return result.bars || [];
 });
 
-ipcMain.handle('mt5:positions', async () => {
-  const result = await bridgeRequest('positions');
-  return result.positions || [];
-});
-
-ipcMain.handle('mt5:deals', async (_event, days) => {
-  const result = await bridgeRequest('deals', { days: Number(days) || 30 });
-  return result.deals || [];
-});
-
-ipcMain.handle('mt5:agent-state', async (_event, armed) => {
-  const nextState = armed === true;
-  await bridgeRequest('agent_state', { armed: nextState });
-  agentArmed = nextState;
-  return { armed: agentArmed };
-});
-
 ipcMain.handle('mt5:manual-order', async (_event, payload) => {
-  if (agentArmed) throw new Error('Manual Buy/Sell is disabled while the MT5 autopilot is armed. Pause it first.');
   if (!payload || !/^AUDCAD[A-Z0-9.+_-]*$/i.test(String(payload.symbol || ''))) {
     throw new Error('Manual Buy/Sell is currently limited to the broker AUDCAD symbol.');
   }
@@ -276,37 +219,6 @@ ipcMain.handle('mt5:manual-order', async (_event, payload) => {
     side: String(payload.side).toUpperCase(),
     confirmed: true,
     liveConfirmed: payload.liveConfirmed === true,
-  }, 20000);
-  return result.result;
-});
-
-ipcMain.handle('mt5:agent-evaluate', async (_event, payload) => {
-  if (!agentArmed) throw new Error('The MT5 autopilot is not armed in Money Work.');
-  if (!payload || !/^AUDCAD[A-Z0-9.+_-]*$/i.test(String(payload.symbol || ''))) {
-    throw new Error('The automatic agent is restricted to the broker AUDCAD symbol.');
-  }
-  if (!['WATCH BUY', 'WATCH SELL', 'WAIT'].includes(payload.signal)) {
-    throw new Error('Invalid market signal for the automatic agent.');
-  }
-  const rsi = Number(payload.rsi);
-  if (!Number.isFinite(rsi) || rsi < 0 || rsi > 100) throw new Error('Invalid RSI value.');
-  const schedule = payload.schedule || {};
-  const days = Array.isArray(schedule.days) ? schedule.days.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6) : [];
-  const rawReference = payload.reference;
-  const reference = rawReference && typeof rawReference === 'object' ? {
-    base: String(rawReference.base || '').slice(0, 8),
-    sourceDate: String(rawReference.sourceDate || '').slice(0, 10),
-    rate: Number(rawReference.rate),
-    fetchedAt: String(rawReference.fetchedAt || '').slice(0, 40),
-  } : null;
-  const result = await bridgeRequest('agent_evaluate', {
-    symbol: String(payload.symbol),
-    signal: payload.signal,
-    rsi,
-    entryAllowed: payload.entryAllowed !== false,
-    liveConfirmed: payload.liveConfirmed === true,
-    schedule: { start: String(schedule.start || ''), end: String(schedule.end || ''), days },
-    reference,
   }, 20000);
   return result.result;
 });

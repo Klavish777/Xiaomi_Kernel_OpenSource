@@ -1,8 +1,8 @@
-"""MT5 data bridge and explicitly armed, risk-capped Money Work agent for Windows.
+"""Manual-only MT5 bridge for Money Work on Windows.
 
-The protocol is newline-delimited JSON over stdin/stdout. Automated execution is limited
-by bridge-side account-mode checks, a 0.01-lot cap, required SL/TP, a one-position rule,
-a daily loss stop, and a locally confirmed live-account flag.
+New market orders are sent only after an explicit user confirmation. Bridge-side checks
+enforce account permissions, a 0.01-lot cap, required SL/TP, one-position, spread,
+daily-loss and account-value limits. No strategy or autonomous entry logic is exposed.
 """
 from __future__ import annotations
 
@@ -10,25 +10,18 @@ import json
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from trading_policy import (
-    BOT_MAGIC,
-    MAX_DAILY_LOSS_RATIO,
-    MAX_AGENT_EQUITY,
     MAX_SPREAD_PIPS,
-    MAX_VOLUME,
     STOP_LOSS_PIPS,
     TAKE_PROFIT_PIPS,
+    account_balance_or_equity_cap_reached,
     account_mode_allowed,
-    agent_equity_goal_reached,
     daily_loss_exceeded,
-    is_inside_schedule,
-    loss_streak_cooldown,
     normalize_volume,
     pip_size,
     profit_target_for_volume,
-    reference_is_valid,
 )
 
 try:
@@ -41,12 +34,10 @@ _out_lock = threading.Lock()
 _mt5_lock = threading.RLock()
 _state_lock = threading.RLock()
 _active_symbols: set[str] = set()
-QUOTE_POLL_INTERVAL_SECONDS = 0.1  # Poll up to 10 Hz; broker ticks may arrive less often.
+QUOTE_POLL_INTERVAL_SECONDS = 0.05  # Read the latest terminal tick up to 20 Hz; this does not create broker ticks.
 _connected = False
-_agent_armed = False
 _running = True
-_learning_cache = {"login": None, "loadedAt": 0.0, "trades": []}
-MANUAL_MAGIC = BOT_MAGIC + 1
+MANUAL_MAGIC = 26092708
 
 
 def emit(payload: dict) -> None:
@@ -86,7 +77,7 @@ def account_payload() -> dict:
 
 
 def connect(payload: dict) -> dict:
-    global _connected, _agent_armed
+    global _connected
     login_text = str(payload.get("login", "")).strip()
     password = str(payload.get("password", ""))
     server = str(payload.get("server", "")).strip()
@@ -104,7 +95,6 @@ def connect(payload: dict) -> dict:
         if not mt5.initialize(**kwargs):
             raise RuntimeError(f"Could not connect to MT5: {mt5.last_error()}. Check the server, account, password, and terminal path.")
         _connected = True
-        _agent_armed = False
         return account_payload()
 
 
@@ -148,73 +138,15 @@ def subscribe(symbol: str) -> dict:
         return {"symbol": name, "bid": float(tick.bid), "ask": float(tick.ask), "time": int(tick.time)}
 
 
-def get_positions() -> list[dict]:
-    with _mt5_lock:
-        if not _connected:
-            raise RuntimeError("Connect an MT5 account first.")
-        positions = mt5.positions_get()
-        if positions is None:
-            raise RuntimeError(f"Could not read open MT5 positions: {mt5.last_error()}")
-        return [{
-            "ticket": int(row.ticket),
-            "symbol": str(row.symbol),
-            "type": "BUY" if int(row.type) == mt5.POSITION_TYPE_BUY else "SELL",
-            "volume": float(row.volume),
-            "openPrice": float(row.price_open),
-            "currentPrice": float(row.price_current),
-            "profit": float(row.profit),
-            "swap": float(row.swap),
-            "commission": float(getattr(row, "commission", 0)),
-            "stopLoss": float(row.sl),
-            "takeProfit": float(row.tp),
-            "time": int(row.time),
-            "comment": str(row.comment),
-            "magic": int(getattr(row, "magic", 0)),
-        } for row in positions]
-
-
-def get_deals(days: int = 30) -> list[dict]:
-    lookback = max(1, min(int(days), 365))
-    with _mt5_lock:
-        if not _connected:
-            raise RuntimeError("Connect an MT5 account first.")
-        rows = mt5.history_deals_get(datetime.now() - timedelta(days=lookback), datetime.now())
-        if rows is None:
-            raise RuntimeError(f"Could not read MT5 deal history: {mt5.last_error()}")
-        result = [{
-            "ticket": int(row.ticket),
-            "order": int(row.order),
-            "positionId": int(row.position_id),
-            "symbol": str(row.symbol),
-            "type": "BUY" if int(row.type) == mt5.DEAL_TYPE_BUY else "SELL" if int(row.type) == mt5.DEAL_TYPE_SELL else "OTHER",
-            "entry": int(row.entry),
-            "volume": float(row.volume),
-            "price": float(row.price),
-            "profit": float(row.profit),
-            "commission": float(row.commission),
-            "swap": float(row.swap),
-            "time": int(row.time),
-            "comment": str(row.comment),
-            "magic": int(getattr(row, "magic", 0)),
-        } for row in rows]
-        return result[-1000:]
-
-
-def get_history(symbol: str, timeframe: str, count: int = 2000) -> list[dict]:
-    frames = {
-        "1M": mt5.TIMEFRAME_M1,
-        "5M": mt5.TIMEFRAME_M5,
-        "15M": mt5.TIMEFRAME_M15,
-        "1H": mt5.TIMEFRAME_H1,
-    }
+def get_history(symbol: str, count: int = 2000) -> list[dict]:
     name = symbol.strip()
-    frame = frames.get(timeframe.upper())
+    frame = mt5.TIMEFRAME_M15
     try:
         count = max(2, min(2000, int(count)))
     except (TypeError, ValueError):
         count = 2000
     if not name or frame is None:
-        raise ValueError("Choose a symbol and supported timeframe (1M, 5M, 15M, 1H).")
+        raise ValueError("Choose a symbol with the AUDCAD 15-minute chart available.")
     with _mt5_lock:
         if not _connected:
             raise RuntimeError("Connect an MT5 account first.")
@@ -277,175 +209,51 @@ def _protected_market_order_request(symbol: str, side: str, volume: float, tick,
     }
 
 
-def _close_bot_position(position, symbol: str, tick, info) -> dict:
+def _close_manual_position(position, tick) -> dict:
     is_buy = int(position.type) == int(mt5.POSITION_TYPE_BUY)
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
+        "symbol": str(position.symbol),
         "position": int(position.ticket),
         "volume": float(position.volume),
         "type": mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY,
         "price": float(tick.bid if is_buy else tick.ask),
         "deviation": 20,
-        "magic": BOT_MAGIC,
-        "comment": "MoneyWork agent close",
+        "magic": MANUAL_MAGIC,
+        "comment": "MoneyWork manual target exit",
         "type_time": mt5.ORDER_TIME_GTC,
     }
     return _send_market_deal(request)
 
 
-def evaluate_agent(command: dict) -> dict:
-    symbol = str(command.get("symbol", "")).strip()
-    if not symbol or not symbol.upper().startswith("AUDCAD"):
-        raise ValueError("The automatic MT5 agent is currently restricted to the AUDCAD instrument.")
-    signal = str(command.get("signal", "WAIT"))
-    if signal not in {"WATCH BUY", "WATCH SELL", "WAIT"}:
-        raise ValueError("Invalid automatic-agent signal.")
-    with _mt5_lock:
-        if not _connected:
-            raise RuntimeError("Connect an MT5 account before starting the trade agent.")
-        account = mt5.account_info()
-        terminal = mt5.terminal_info()
-        if account is None or terminal is None:
-            raise RuntimeError(f"MT5 account or terminal is unavailable: {mt5.last_error()}")
-        trade_mode = int(account.trade_mode)
-        live_confirmed = command.get("liveConfirmed") is True
-        if not account_mode_allowed(trade_mode, live_confirmed):
-            raise PermissionError("Order execution is restricted to a demo account or an explicitly confirmed live account.")
-        if not bool(getattr(account, "trade_allowed", False)) or not bool(getattr(terminal, "trade_allowed", False)) or bool(getattr(terminal, "tradeapi_disabled", False)):
-            raise PermissionError("MT5 or this account has disabled algorithmic trading. Enable it in MetaTrader and reconnect.")
-
-        now = datetime.now()
-        settings = command.get("schedule") if isinstance(command.get("schedule"), dict) else {}
-        scheduled = is_inside_schedule(now, str(settings.get("start", "09:00")), str(settings.get("end", "17:00")), settings.get("days", []))
-        info = mt5.symbol_info(symbol)
-        tick = mt5.symbol_info_tick(symbol)
-        if info is None or tick is None or float(tick.bid) <= 0 or float(tick.ask) <= 0:
-            raise RuntimeError(f"No valid MT5 market data is available for {symbol}.")
-        tick_time = int(getattr(tick, "time", 0))
-        tick_age = now.timestamp() - tick_time if tick_time else float("inf")
-        if not tick_time or tick_age > 30:
-            raise RuntimeError("The latest AUDCAD tick is stale; new orders are blocked until fresh market data arrives.")
-        if tick_age < -120:
-            raise RuntimeError("The MT5 tick clock is more than two minutes ahead of this computer; sync the Windows and terminal clocks before enabling new entries.")
-
-        all_positions = mt5.positions_get(symbol=symbol)
-        if all_positions is None:
-            raise RuntimeError(f"Could not read open positions: {mt5.last_error()}")
-        bot_positions = [row for row in all_positions if int(getattr(row, "magic", 0)) == BOT_MAGIC]
-        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        todays_deals = mt5.history_deals_get(today, now)
-        if todays_deals is None:
-            raise RuntimeError(f"Could not read today's trade history: {mt5.last_error()}")
-        account_realized_pnl = sum(float(row.profit) + float(row.commission) + float(row.swap) for row in todays_deals)
-        account_floating_pnl = float(getattr(account, "profit", 0))
-        account_equity = float(getattr(account, "equity", float(account.balance) + account_floating_pnl))
-        equity_or_balance = max(account_equity, float(account.balance))
-        start_balance = float(account.balance) - account_realized_pnl
-        daily_pnl = account_realized_pnl + account_floating_pnl
-        daily_stop = daily_loss_exceeded(start_balance, account_realized_pnl, account_floating_pnl)
-
-        closing_entries = {int(getattr(mt5, "DEAL_ENTRY_OUT", 1)), int(getattr(mt5, "DEAL_ENTRY_OUT_BY", 3))}
-        if now.timestamp() - float(_learning_cache.get("loadedAt", 0)) >= 60 or _learning_cache.get("login") != int(account.login):
-            month_deals = mt5.history_deals_get(now - timedelta(days=30), now)
-            if month_deals is None:
-                raise RuntimeError(f"Could not read recent trade history for adaptive safeguards: {mt5.last_error()}")
-            _learning_cache["trades"] = [{"time": int(row.time), "profit": float(row.profit), "commission": float(row.commission), "swap": float(row.swap)}
-                                          for row in month_deals if int(getattr(row, "magic", 0)) == BOT_MAGIC
-                                          and str(getattr(row, "symbol", "")).upper().startswith("AUDCAD")
-                                          and int(getattr(row, "entry", -1)) in closing_entries]
-            _learning_cache["loadedAt"] = now.timestamp()
-            _learning_cache["login"] = int(account.login)
-        closed_trades = list(_learning_cache["trades"])
-        cooldown_until = loss_streak_cooldown(closed_trades, now)
-        recent = sorted(closed_trades, key=lambda row: row["time"], reverse=True)[:20]
-        win_rate = (sum(1 for row in recent if row["profit"] + row["commission"] + row["swap"] > 0) / len(recent)) if recent else None
-        consecutive_losses = 0
-        for row in sorted(closed_trades, key=lambda item: item["time"], reverse=True):
-            if row["profit"] + row["commission"] + row["swap"] < 0:
-                consecutive_losses += 1
-            else:
-                break
-
-        if agent_equity_goal_reached(equity_or_balance):
-            closed = [_close_bot_position(position, symbol, tick, info) for position in bot_positions]
-            return {"state": "capital_goal_reached", "equity": account_equity, "balance": float(account.balance),
-                    "equityCap": MAX_AGENT_EQUITY, "accountCurrency": str(getattr(account, "currency", "account currency")),
-                    "closed": closed, "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
-
-        if daily_stop:
-            closed = []
-            for position in bot_positions:
-                closed.append(_close_bot_position(position, symbol, tick, info))
-            return {"state": "daily_loss_stop", "dailyPnl": daily_pnl,
-                    "dailyLossLimit": round(start_balance * MAX_DAILY_LOSS_RATIO, 2), "closed": closed,
-                    "closedTrades": len(closed_trades), "winRate": win_rate, "consecutiveLosses": consecutive_losses}
-
-        if bot_positions:
-            position = bot_positions[0]
-            position_volume = float(position.volume)
-            position_profit = (float(getattr(position, "profit", 0)) + float(getattr(position, "swap", 0))
-                               + float(getattr(position, "commission", 0)))
-            profit_target = profit_target_for_volume(position_volume)
-            if position_profit >= profit_target:
-                result = _close_bot_position(position, symbol, tick, info)
-                return {"state": "profit_target_closed", "position": int(position.ticket), "result": result,
-                        "floatingProfit": round(position_profit, 2), "profitTarget": profit_target,
-                        "profitCurrency": str(getattr(account, "currency", "account currency")),
-                        "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
-            position_side = "WATCH BUY" if int(position.type) == int(mt5.POSITION_TYPE_BUY) else "WATCH SELL"
-            should_close = not scheduled or (signal in {"WATCH BUY", "WATCH SELL"} and signal != position_side)
-            if should_close:
-                result = _close_bot_position(position, symbol, tick, info)
-                return {"state": "position_closed", "position": int(position.ticket), "result": result,
-                        "dailyPnl": daily_pnl, "closedTrades": len(closed_trades),
-                        "winRate": win_rate, "consecutiveLosses": consecutive_losses}
-            return {"state": "position_held", "position": int(position.ticket), "dailyPnl": daily_pnl,
-                    "closedTrades": len(closed_trades), "winRate": win_rate, "consecutiveLosses": consecutive_losses}
-
-        if not scheduled:
-            return {"state": "outside_schedule", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
-        if cooldown_until:
-            return {"state": "learning_cooldown", "cooldownUntil": cooldown_until.isoformat(), "dailyPnl": daily_pnl,
-                    "closedTrades": len(closed_trades), "winRate": win_rate, "consecutiveLosses": consecutive_losses}
-        if command.get("entryAllowed") is False:
-            return {"state": "analyst_paused", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate,
-                    "message": "At least one entry analyst is paused or not ready; no new position was opened."}
-        if signal == "WAIT":
-            return {"state": "waiting_signal", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
-        if not reference_is_valid(command.get("reference"), now):
-            return {"state": "awaiting_internet_check", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades),
-                    "winRate": win_rate, "message": "A recent, verified AUD/CAD internet reference is required before a new entry."}
-        if any(int(getattr(row, "magic", 0)) != BOT_MAGIC for row in all_positions):
-            return {"state": "blocked_manual_position", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades), "winRate": win_rate}
-
-        rsi = float(command.get("rsi", 50))
-        effective_signal = signal
-        if len(recent) >= 5 and win_rate is not None and win_rate < 0.4:
-            if (signal == "WATCH BUY" and rsi >= 60) or (signal == "WATCH SELL" and rsi <= 40):
-                effective_signal = "WAIT"
-        if effective_signal == "WAIT":
-            return {"state": "adaptive_filter", "dailyPnl": daily_pnl, "closedTrades": len(closed_trades),
-                    "winRate": win_rate, "consecutiveLosses": consecutive_losses,
-                    "learning": "Entry filter tightened after a weak recent win rate."}
-
-        trading_mode = int(getattr(info, "trade_mode", 0))
-        if trading_mode != int(getattr(mt5, "SYMBOL_TRADE_MODE_FULL", 4)):
-            raise PermissionError("AUDCAD trading is disabled or one-direction-only at this broker; new orders are blocked.")
-        volume = normalize_volume(info)
-        distance = pip_size(int(info.digits), float(info.point))
-        spread_pips = (float(tick.ask) - float(tick.bid)) / distance
-        if spread_pips > MAX_SPREAD_PIPS:
-            return {"state": "spread_filter", "spreadPips": spread_pips, "dailyPnl": daily_pnl,
-                    "closedTrades": len(closed_trades), "winRate": win_rate}
-        side = "BUY" if effective_signal == "WATCH BUY" else "SELL"
-        request = _protected_market_order_request(symbol, side, volume, tick, info, BOT_MAGIC, "MoneyWork EMA RSI agent")
-        result = _send_market_deal(request)
-        return {"state": "position_opened", "side": side, "symbol": symbol,
-                "volume": volume, "entry": request["price"], "stopLoss": request["sl"], "takeProfit": request["tp"],
-                "result": result, "dailyPnl": daily_pnl, "dailyLossLimit": round(start_balance * MAX_DAILY_LOSS_RATIO, 2),
-                "closedTrades": len(closed_trades), "winRate": win_rate, "consecutiveLosses": consecutive_losses,
-                "learning": "The two-second market evaluation uses the latest closed-trade record; two consecutive losses trigger a one-hour cooldown."}
+def manual_target_poller() -> None:
+    """Manage the cash target only for positions created by a confirmed manual order."""
+    while _running:
+        try:
+            with _mt5_lock:
+                if _connected:
+                    positions = mt5.positions_get()
+                    if positions is not None:
+                        for position in positions:
+                            if int(getattr(position, "magic", 0)) != MANUAL_MAGIC:
+                                continue
+                            pnl = sum(float(getattr(position, key, 0) or 0) for key in ("profit", "swap", "commission"))
+                            target = profit_target_for_volume(float(position.volume))
+                            if pnl < target:
+                                continue
+                            tick = mt5.symbol_info_tick(str(position.symbol))
+                            tick_time = int(getattr(tick, "time", 0)) if tick is not None else 0
+                            tick_age = time.time() - tick_time if tick_time else float("inf")
+                            if (tick is None or float(getattr(tick, "bid", 0)) <= 0
+                                    or float(getattr(tick, "ask", 0)) <= 0 or tick_age > 30 or tick_age < -120):
+                                continue
+                            result = _close_manual_position(position, tick)
+                            emit({"type": "manual_target_exit", "ticket": int(position.ticket),
+                                  "symbol": str(position.symbol), "profit": pnl, "target": target,
+                                  "result": result})
+        except Exception as exc:
+            emit({"type": "warning", "message": f"Manual position target check failed: {exc}"})
+        time.sleep(0.25)
 
 
 def place_manual_order(command: dict) -> dict:
@@ -458,9 +266,6 @@ def place_manual_order(command: dict) -> dict:
         raise ValueError("Choose Buy or Sell.")
     if command.get("confirmed") is not True:
         raise PermissionError("Confirm the order details before placing a manual order.")
-    if _agent_armed:
-        raise PermissionError("Manual orders are disabled while the MT5 autopilot is armed. Pause the autopilot first.")
-
     with _mt5_lock:
         if not _connected:
             raise RuntimeError("Connect an MT5 account before placing a manual order.")
@@ -501,7 +306,7 @@ def place_manual_order(command: dict) -> dict:
         realized_pnl = sum(float(row.profit) + float(row.commission) + float(row.swap) for row in todays_deals)
         floating_pnl = float(getattr(account, "profit", 0))
         start_balance = float(account.balance) - realized_pnl
-        if agent_equity_goal_reached(max(float(account.balance), float(getattr(account, "equity", float(account.balance) + floating_pnl)))):
+        if account_balance_or_equity_cap_reached(max(float(account.balance), float(getattr(account, "equity", float(account.balance) + floating_pnl)))):
             raise PermissionError("The 80-million account-currency balance/equity limit has been reached; no new order is allowed.")
         if daily_loss_exceeded(start_balance, realized_pnl, floating_pnl):
             raise PermissionError("The 1% account-wide daily-loss stop is active; no new order is allowed.")
@@ -520,15 +325,13 @@ def place_manual_order(command: dict) -> dict:
 
 
 def disconnect() -> None:
-    global _connected, _agent_armed
+    global _connected
     with _state_lock:
         _active_symbols.clear()
     with _mt5_lock:
         if _connected:
             mt5.shutdown()
             _connected = False
-        _agent_armed = False
-
 
 def quote_poller() -> None:
     while _running:
@@ -548,7 +351,6 @@ def quote_poller() -> None:
 
 
 def handle(command: dict) -> None:
-    global _agent_armed
     request_id = command.get("requestId")
     action = command.get("action")
     try:
@@ -561,18 +363,9 @@ def handle(command: dict) -> None:
         elif action == "subscribe":
             response(request_id, True, quote=subscribe(str(command.get("symbol", ""))))
         elif action == "history":
-            response(request_id, True, bars=get_history(str(command.get("symbol", "")), str(command.get("timeframe", "15M")), command.get("count", 2000)))
-        elif action == "positions":
-            response(request_id, True, positions=get_positions())
-        elif action == "agent_evaluate":
-            response(request_id, True, result=evaluate_agent(command))
-        elif action == "agent_state":
-            _agent_armed = command.get("armed") is True
-            response(request_id, True, armed=_agent_armed)
+            response(request_id, True, bars=get_history(str(command.get("symbol", "")), command.get("count", 2000)))
         elif action == "manual_order":
             response(request_id, True, result=place_manual_order(command))
-        elif action == "deals":
-            response(request_id, True, deals=get_deals(command.get("days", 30)))
         elif action == "disconnect":
             disconnect()
             response(request_id, True, disconnected=True)
@@ -586,8 +379,10 @@ def handle(command: dict) -> None:
 
 def main() -> None:
     global _running
-    poller = threading.Thread(target=quote_poller, daemon=True)
+    poller = threading.Thread(target=quote_poller, name="mt5-quotes", daemon=True)
+    target_poller = threading.Thread(target=manual_target_poller, name="mt5-manual-targets", daemon=True)
     poller.start()
+    target_poller.start()
     try:
         for line in sys.stdin:
             if not line.strip():
