@@ -458,3 +458,5 @@ body { overflow:hidden; }
 @media (prefers-reduced-motion: reduce) {
   .mascot-toggle::before,.mascot-toggle img,.overview-agent-footer .agent-state-label.state-on i,.realistic-earth-image { animation:none !important; }
 }
+
+@media (min-width:901px) and (max-height:900px) { .overview-fit .live-account-strip { padding:6px 10px; gap:6px; } .overview-fit .live-account-metric { gap:2px; } .overview-fit .live-account-metric > span { font-size:7px; } .overview-fit .live-account-metric > strong { font-size:12px; } .overview-fit .live-account-metric > small { font-size:7px; } }

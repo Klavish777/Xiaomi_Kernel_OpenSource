@@ -223,6 +223,11 @@ ipcMain.handle('mt5:disconnect', async () => {
   return true;
 });
 
+ipcMain.handle('mt5:account', async () => {
+  const result = await bridgeRequest('account');
+  return result.account;
+});
+
 ipcMain.handle('mt5:symbols', async (_event, query) => {
   const result = await bridgeRequest('symbols', { query: String(query || '') });
   return result.symbols || [];
@@ -233,8 +238,8 @@ ipcMain.handle('mt5:subscribe', async (_event, symbol) => {
   return result.quote;
 });
 
-ipcMain.handle('mt5:history', async (_event, symbol, timeframe) => {
-  const result = await bridgeRequest('history', { symbol: String(symbol || ''), timeframe: String(timeframe || '15M') });
+ipcMain.handle('mt5:history', async (_event, symbol, timeframe, count) => {
+  const result = await bridgeRequest('history', { symbol: String(symbol || ''), timeframe: String(timeframe || '15M'), count: Number(count) || 2000 });
   return result.bars || [];
 });
 

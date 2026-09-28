@@ -41,6 +41,7 @@ _out_lock = threading.Lock()
 _mt5_lock = threading.RLock()
 _state_lock = threading.RLock()
 _active_symbols: set[str] = set()
+QUOTE_POLL_INTERVAL_SECONDS = 0.1  # Poll up to 10 Hz; broker ticks may arrive less often.
 _connected = False
 _running = True
 _learning_cache = {"login": None, "loadedAt": 0.0, "trades": []}
@@ -60,15 +61,23 @@ def account_payload() -> dict:
     info = mt5.account_info()
     if info is None:
         raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
+    terminal = mt5.terminal_info()
+    terminal_trade_allowed = bool(getattr(terminal, "trade_allowed", False)) if terminal is not None else False
+    external_api_disabled = bool(getattr(terminal, "tradeapi_disabled", True)) if terminal is not None else True
+    account_trade_allowed = bool(getattr(info, "trade_allowed", False))
     return {
         "login": str(info.login),
         "server": str(info.server),
         "currency": str(info.currency),
         "balance": float(info.balance),
         "equity": float(info.equity),
+        "margin": float(getattr(info, "margin", 0)),
         "leverage": int(info.leverage),
         "tradeMode": int(info.trade_mode),
-        "tradeAllowed": bool(getattr(info, "trade_allowed", False)),
+        "tradeAllowed": account_trade_allowed,
+        "terminalTradeAllowed": terminal_trade_allowed,
+        "externalApiTradingDisabled": external_api_disabled,
+        "algorithmicTradingAllowed": account_trade_allowed and terminal_trade_allowed and not external_api_disabled,
         "accountType": "demo" if int(info.trade_mode) == 0 else "contest" if int(info.trade_mode) == 1 else "real",
         "connected": True,
     }
@@ -93,6 +102,13 @@ def connect(payload: dict) -> dict:
         if not mt5.initialize(**kwargs):
             raise RuntimeError(f"Could not connect to MT5: {mt5.last_error()}. Check the server, account, password, and terminal path.")
         _connected = True
+        return account_payload()
+
+
+def get_account() -> dict:
+    with _mt5_lock:
+        if not _connected:
+            raise RuntimeError("Connect an MT5 account first.")
         return account_payload()
 
 
@@ -124,6 +140,7 @@ def subscribe(symbol: str) -> dict:
         if tick is None:
             raise RuntimeError(f"No market tick yet for {name}: {mt5.last_error()}")
         with _state_lock:
+            _active_symbols.clear()
             _active_symbols.add(name)
         return {"symbol": name, "bid": float(tick.bid), "ask": float(tick.ask), "time": int(tick.time)}
 
@@ -144,6 +161,7 @@ def get_positions() -> list[dict]:
             "currentPrice": float(row.price_current),
             "profit": float(row.profit),
             "swap": float(row.swap),
+            "commission": float(getattr(row, "commission", 0)),
             "stopLoss": float(row.sl),
             "takeProfit": float(row.tp),
             "time": int(row.time),
@@ -179,7 +197,7 @@ def get_deals(days: int = 30) -> list[dict]:
         return result[-1000:]
 
 
-def get_history(symbol: str, timeframe: str) -> list[dict]:
+def get_history(symbol: str, timeframe: str, count: int = 2000) -> list[dict]:
     frames = {
         "1M": mt5.TIMEFRAME_M1,
         "5M": mt5.TIMEFRAME_M5,
@@ -188,12 +206,16 @@ def get_history(symbol: str, timeframe: str) -> list[dict]:
     }
     name = symbol.strip()
     frame = frames.get(timeframe.upper())
+    try:
+        count = max(2, min(2000, int(count)))
+    except (TypeError, ValueError):
+        count = 2000
     if not name or frame is None:
         raise ValueError("Choose a symbol and supported timeframe (1M, 5M, 15M, 1H).")
     with _mt5_lock:
         if not _connected:
             raise RuntimeError("Connect an MT5 account first.")
-        rates = mt5.copy_rates_from_pos(name, frame, 0, 2000)
+        rates = mt5.copy_rates_from_pos(name, frame, 0, count)
         if rates is None:
             raise RuntimeError(f"Could not read MT5 history for {name}: {mt5.last_error()}")
         return [{
@@ -441,7 +463,7 @@ def quote_poller() -> None:
                               "last": float(tick.last), "time": int(tick.time), "timeMsc": int(tick.time_msc)})
                 except Exception as exc:
                     emit({"type": "warning", "message": f"Quote read failed for {symbol}: {exc}"})
-        time.sleep(1.0)
+        time.sleep(QUOTE_POLL_INTERVAL_SECONDS)
 
 
 def handle(command: dict) -> None:
@@ -450,12 +472,14 @@ def handle(command: dict) -> None:
     try:
         if action == "connect":
             response(request_id, True, account=connect(command))
+        elif action == "account":
+            response(request_id, True, account=get_account())
         elif action == "symbols":
             response(request_id, True, symbols=get_symbols(str(command.get("query", ""))))
         elif action == "subscribe":
             response(request_id, True, quote=subscribe(str(command.get("symbol", ""))))
         elif action == "history":
-            response(request_id, True, bars=get_history(str(command.get("symbol", "")), str(command.get("timeframe", "15M"))))
+            response(request_id, True, bars=get_history(str(command.get("symbol", "")), str(command.get("timeframe", "15M")), command.get("count", 2000)))
         elif action == "positions":
             response(request_id, True, positions=get_positions())
         elif action == "agent_evaluate":

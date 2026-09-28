@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, compareAppVersions, computeRuleSignal, findNewerAppRelease, isInsideSchedule, marketTimestampMs, mergeMarketTick, normalizeMarketTimestamp, normalizeBankOfCanadaReference, summarizePaperHistory, movingAverageValues, sliceChartHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
+import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, compareAppVersions, computeRuleSignal, findNewerAppRelease, isInsideSchedule, marketTimestampMs, mergeMarketTick, normalizeMarketTimestamp, normalizeBankOfCanadaReference, summarizePaperHistory, movingAverageValues, sliceChartHistory, mergeHistoryBars, summarizeAccountPerformance, updateTickCadence, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
 
 test('schedule follows selected local weekdays and inclusive start/exclusive end', () => {
   const mondayMorning = new Date(2026, 8, 28, 9, 0);
@@ -23,10 +23,57 @@ test('MT5 quote timestamps normalize seconds, milliseconds, microseconds, and na
   assert.equal(normalizeMarketTimestamp(0), null);
 });
 
+test('tick cadence reports measured broker timestamp intervals rather than poll frequency', () => {
+  let cadence = updateTickCadence(null, { timeMsc: 1_790_586_000_000 });
+  cadence = updateTickCadence(cadence, { timeMsc: 1_790_586_000_100 });
+  cadence = updateTickCadence(cadence, { timeMsc: 1_790_586_000_300 });
+  assert.equal(cadence.averageMs, 150);
+  assert.equal(cadence.sampleCount, 2);
+  const repeated = updateTickCadence(cadence, { timeMsc: 1_790_586_000_300 });
+  assert.equal(repeated, cadence);
+  const longGap = updateTickCadence(cadence, { timeMsc: 1_790_586_100_000 });
+  assert.equal(longGap.sampleCount, 0);
+});
+
+test('incremental candle history replaces forming candles, appends new bars, and stays ordered', () => {
+  const existing = [
+    { time: 20, open: 2, high: 2, low: 2, close: 2 },
+    { time: 10, open: 1, high: 1, low: 1, close: 1 },
+  ];
+  const refreshed = mergeHistoryBars(existing, [
+    { time: 20, open: 2, high: 2.5, low: 1.8, close: 2.4 },
+    { time: 30, open: 2.4, high: 2.6, low: 2.3, close: 2.5 },
+  ]);
+  assert.deepEqual(refreshed.map((bar) => bar.time), [10, 20, 30]);
+  assert.equal(refreshed[1].close, 2.4);
+  assert.equal(mergeHistoryBars(refreshed, [], 2).length, 2);
+});
+
+test('account summary separates balance, equity, open floating P&L, and today realized P&L', () => {
+  const now = new Date(2026, 8, 28, 12, 0, 0);
+  const today = new Date(2026, 8, 28, 9, 0, 0).getTime() / 1000;
+  const yesterday = new Date(2026, 8, 27, 23, 0, 0).getTime() / 1000;
+  const summary = summarizeAccountPerformance(
+    { balance: 1000, equity: 1012, margin: 300, currency: 'EUR', syncedAt: 123 },
+    [{ profit: 10, swap: -1, commission: -0.5 }, { profit: 4, swap: 0, commission: 0 }],
+    [{ time: today, profit: 3, commission: -0.2, swap: 0 }, { time: yesterday, profit: 100, commission: 0, swap: 0 }],
+    now,
+  );
+  assert.equal(summary.balance, 1000);
+  assert.equal(summary.equity, 1012);
+  assert.equal(summary.usedMargin, 300);
+  assert.equal(summary.currency, 'EUR');
+  assert.equal(summary.openPositionCount, 2);
+  assert.equal(summary.floatingPnl, 12.5);
+  assert.equal(summary.realizedToday, 2.8);
+  assert.equal(summary.syncedAt, 123);
+});
+
 test('repeated MT5 poller ticks do not refresh receipt age; changed ticks do', () => {
   const first = mergeMarketTick(null, { symbol: 'AUDCAD', bid: 0.9, ask: 0.9001, timeMsc: 1_790_586_000_000 }, 1000);
   const repeated = mergeMarketTick(first, { symbol: 'AUDCAD', bid: 0.9, ask: 0.9001, timeMsc: 1_790_586_000_000 }, 5000);
   assert.equal(repeated.receivedAt, 1000);
+  assert.equal(repeated, first);
   const next = mergeMarketTick(repeated, { symbol: 'AUDCAD', bid: 0.90001, ask: 0.90011, timeMsc: 1_790_586_001_000 }, 6000);
   assert.equal(next.receivedAt, 6000);
   const futureClock = mergeMarketTick(null, { symbol: 'AUDCAD', bid: 0.9, ask: 0.9001, timeMsc: 1_800_000_000_000 }, 1_790_000_000_000);

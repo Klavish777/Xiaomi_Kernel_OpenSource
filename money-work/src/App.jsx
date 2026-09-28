@@ -7,7 +7,7 @@ import {
   Brain, Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
   Globe, Bot, Play, Pause, CircleCheck, Settings2,
 } from 'lucide-react';
-import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, findNewerAppRelease, marketTimestampMs, mergeMarketTick, movingAverageValues, normalizeBankOfCanadaReference, sliceChartHistory, summarizePaperHistory, validateReferencePayload } from './agentCore.mjs';
+import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, findNewerAppRelease, marketTimestampMs, mergeMarketTick, movingAverageValues, normalizeBankOfCanadaReference, sliceChartHistory, summarizeAccountPerformance, summarizePaperHistory, mergeHistoryBars, updateTickCadence, validateReferencePayload } from './agentCore.mjs';
 import realisticEarth from './assets/realistic-earth.png';
 import cartoonBrain from './assets/cartoon-brain.png';
 import cartoonMiner from './assets/cartoon-miner.png';
@@ -174,6 +174,7 @@ function App() {
   const brokerGoalReached = Boolean(brokerGoalKey && brokerGoalMap[brokerGoalKey]);
   const [savedAccount, setSavedAccount] = useState(null);
   const [quotes, setQuotes] = useState({});
+  const [quoteCadenceBySymbol, setQuoteCadenceBySymbol] = useState({});
   const [historyBySymbol, setHistoryBySymbol] = useState({});
   const [mt5Error, setMt5Error] = useState('');
   const [connecting, setConnecting] = useState(false);
@@ -198,12 +199,13 @@ function App() {
   const [researchRunning, setResearchRunning] = useState(false);
   const [researchLoading, setResearchLoading] = useState(false);
   const [researchStatus, setResearchStatus] = useState('');
-  const [researchRate, setResearchRate] = useState(0);
   const [availableUpdate, setAvailableUpdate] = useState(null);
   const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState('');
   const [updateMessage, setUpdateMessage] = useState('');
   const [updateCheckStatus, setUpdateCheckStatus] = useState('idle');
   const researchBusy = useRef(false);
+  const lastSeenQuotes = useRef({});
+  const tickCadenceSamples = useRef({});
   const updateCheckBusy = useRef(false);
   const paperLastQuoteTime = useRef(0);
   const brokerEvaluateBusy = useRef(false);
@@ -225,6 +227,25 @@ function App() {
     ? (((Number(liveQuote.bid) + Number(liveQuote.ask)) / 2 / Number(referenceData.rate)) - 1) * 10000
     : null;
   const todayLabel = new Intl.DateTimeFormat(language === 'ru' ? 'ru-RU' : 'en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase();
+  const accountSummary = useMemo(() => summarizeAccountPerformance(mt5Account, positions, deals), [mt5Account, positions, deals]);
+  const accountIdentity = mt5Account ? `${mt5Account.login}@${mt5Account.server}` : '';
+
+  function acceptQuote(symbol, incoming) {
+    const previous = lastSeenQuotes.current[symbol];
+    const merged = mergeMarketTick(previous, incoming);
+    if (merged === previous) return previous;
+    const cadence = updateTickCadence(tickCadenceSamples.current[symbol], merged);
+    tickCadenceSamples.current[symbol] = cadence;
+    if (cadence.sampleCount > 0) {
+      setQuoteCadenceBySymbol((current) => ({
+        ...current,
+        [symbol]: { averageMs: cadence.averageMs, sampleCount: cadence.sampleCount },
+      }));
+    }
+    lastSeenQuotes.current[symbol] = merged;
+    setQuotes((current) => ({ ...current, [symbol]: merged }));
+    return merged;
+  }
 
   useEffect(() => {
     localStorage.setItem('money-work-language', language);
@@ -244,50 +265,86 @@ function App() {
       }
     }).catch((error) => setMt5Error(error.message));
     return window.moneyWork.onMt5Event((event) => {
-      if (event.type === 'tick') setQuotes((current) => ({ ...current, [event.symbol]: mergeMarketTick(current[event.symbol], event) }));
+      if (event.type === 'tick') acceptQuote(event.symbol, event);
       if (event.type === 'error' || event.type === 'warning' || event.type === 'fatal') setMt5Error(event.message || 'MT5 connector error');
     });
   }, []);
 
   useEffect(() => {
-    if (!window.moneyWork || !mt5Account) {
+    if (!window.moneyWork || !accountIdentity) {
       setPositions([]);
       setDeals([]);
       return undefined;
     }
     let active = true;
+    let busy = false;
+    let lastDealsSync = 0;
     const refreshAccountData = async () => {
-      setAccountDataLoading(true);
+      if (busy) return;
+      busy = true;
       try {
-        const [nextPositions, nextDeals] = await Promise.all([
+        const [account, nextPositions] = await Promise.all([
+          window.moneyWork.getMt5Account(),
           window.moneyWork.getMt5Positions(),
-          window.moneyWork.getMt5Deals(30),
         ]);
+        let nextDeals;
+        if (Date.now() - lastDealsSync >= 5000) {
+          lastDealsSync = Date.now();
+          try { nextDeals = await window.moneyWork.getMt5Deals(30); }
+          catch (error) { if (active) setMt5Error((current) => current || error.message); }
+        }
         if (active) {
+          setMt5Account({ ...account, syncedAt: Date.now() });
           setPositions(nextPositions);
-          setDeals(nextDeals);
+          if (nextDeals) setDeals(nextDeals);
         }
       } catch (error) {
-        if (active) setMt5Error(error.message);
+        if (active) setMt5Error((current) => current || error.message);
       } finally {
-        if (active) setAccountDataLoading(false);
+        busy = false;
       }
     };
     refreshAccountData();
-    const timer = setInterval(refreshAccountData, 15000);
+    const timer = setInterval(refreshAccountData, 1000);
     return () => { active = false; clearInterval(timer); };
-  }, [mt5Account]);
+  }, [accountIdentity]);
 
   useEffect(() => {
     if (!window.moneyWork || !mt5Account || !selectedSymbol) return undefined;
     let active = true;
-    window.moneyWork.getMt5History(selectedSymbol, timeframe).then((bars) => {
-      if (active) setHistoryBySymbol((current) => ({ ...current, [selectedSymbol]: { ...current[selectedSymbol], [timeframe]: bars } }));
-    }).catch((error) => {
-      if (active) setMt5Error(error.message);
-    });
-    return () => { active = false; };
-  }, [mt5Account, selectedSymbol, timeframe]);
+    let busy = false;
+    const refreshHistory = async (initial = false) => {
+      if (busy) return;
+      busy = true;
+      try {
+        const bars = await window.moneyWork.getMt5History(selectedSymbol, timeframe, initial ? 2000 : 3);
+        if (active) setHistoryBySymbol((current) => ({
+          ...current,
+          [selectedSymbol]: {
+            ...current[selectedSymbol],
+            [timeframe]: mergeHistoryBars(current[selectedSymbol]?.[timeframe], bars, 2000),
+          },
+        }));
+      } catch (error) {
+        if (active) setMt5Error((current) => current || error.message);
+      } finally {
+        busy = false;
+      }
+    };
+    refreshHistory(true);
+    const timer = setInterval(() => refreshHistory(false), 1000);
+    return () => { active = false; clearInterval(timer); };
+  }, [accountIdentity, selectedSymbol, timeframe]);
+
+  useEffect(() => {
+    if (!mt5Account || mt5Account.algorithmicTradingAllowed !== false) return;
+    const message = mt5Account.externalApiTradingDisabled
+      ? l('Автоторговля заблокирована настройкой MT5 «Disable automated trading via external Python API». Money Work не может и не будет обходить её: включите разрешение в терминале и переподключите счёт.', 'MT5 blocks automated orders through “Disable automated trading via external Python API.” Money Work cannot and will not bypass this terminal safeguard; enable the permission in MT5 and reconnect.')
+      : mt5Account.terminalTradeAllowed === false
+        ? l('В MT5 выключена кнопка Algo Trading или запрещена алгоритмическая торговля в настройках терминала. Включите её в самом MT5 и переподключите счёт.', 'MT5 Algo Trading is off or algorithmic trading is disallowed in terminal settings. Enable it in MT5 itself and reconnect.')
+        : l('У этого счёта отключено разрешение на торговлю. Проверьте права аккаунта у брокера.', 'Trading is disabled for this account. Check account permissions with the broker.');
+    setMt5Error((current) => current || message);
+  }, [mt5Account?.algorithmicTradingAllowed, mt5Account?.externalApiTradingDisabled, mt5Account?.terminalTradeAllowed]);
 
   async function subscribeInstrument(symbol, force = false) {
     if (!window.moneyWork || (!mt5Account && !force)) return;
@@ -301,7 +358,7 @@ function App() {
       setSelectedSymbol(match);
       setOlderBarsOffset(0);
       const quote = await window.moneyWork.subscribeMt5Symbol(match);
-      setQuotes((current) => ({ ...current, [match]: mergeMarketTick(current[match], quote) }));
+      acceptQuote(match, quote);
     } catch (error) {
       setMt5Error(error.message);
     }
@@ -396,7 +453,6 @@ function App() {
     researchBusy.current = true;
     setResearchLoading(true);
     setResearchStatus('');
-    const startedAt = performance.now();
     try {
       let validated;
       let source;
@@ -423,8 +479,6 @@ function App() {
       const result = { base: 'AUD', rate: validated.rate, sourceDate: validated.date, fetchedAt: new Date().toISOString(), source, checks: validated.checks };
       setReferenceData(result);
       localStorage.setItem(REFERENCE_STORAGE_KEY, JSON.stringify(result));
-      const elapsed = Math.max(250, performance.now() - startedAt);
-      setResearchRate(Math.max(1, Math.round(3 * 60000 / elapsed)));
       setResearchStatus('validated');
     } catch (error) {
       setResearchStatus(error.message || 'Internet reference check failed.');
@@ -478,7 +532,7 @@ function App() {
   useEffect(() => {
     if (!researchRunning) return undefined;
     runInternetResearch();
-    const timer = setInterval(runInternetResearch, 15 * 60 * 1000);
+    const timer = setInterval(runInternetResearch, 6 * 60 * 60 * 1000);
     return () => clearInterval(timer);
   }, [researchRunning]);
 
@@ -569,8 +623,16 @@ function App() {
   async function refreshPositionsNow() {
     if (!window.moneyWork || !mt5Account) return;
     setAccountDataLoading(true);
-    try { setPositions(await window.moneyWork.getMt5Positions()); }
-    catch (error) { setMt5Error(error.message); }
+    try {
+      const [account, nextPositions, nextDeals] = await Promise.all([
+        window.moneyWork.getMt5Account(),
+        window.moneyWork.getMt5Positions(),
+        window.moneyWork.getMt5Deals(30),
+      ]);
+      setMt5Account({ ...account, syncedAt: Date.now() });
+      setPositions(nextPositions);
+      setDeals(nextDeals);
+    } catch (error) { setMt5Error(error.message); }
     finally { setAccountDataLoading(false); }
   }
 
@@ -653,6 +715,9 @@ function App() {
       if (window.moneyWork) await window.moneyWork.disconnectMt5();
       setMt5Account(null);
       setQuotes({});
+      setQuoteCadenceBySymbol({});
+      lastSeenQuotes.current = {};
+      tickCadenceSamples.current = {};
       setSelectedSymbol('AUDCAD');
       setLiveTradeConfirmed(false);
       setExecutionMode('paper');
@@ -803,6 +868,12 @@ function App() {
         </header>
 
         <div className={`page-content workspace-content ${activeNav === 'Overview' ? 'overview-fit' : activeNav === 'Agents' ? 'agents-fit' : ''}`}>
+          {mt5Account && <section className="live-account-strip" aria-label={l('Сводка подключённого счёта MT5', 'Connected MT5 account summary')}>
+            <div className="live-account-metric"><span>{l('Баланс MT5', 'MT5 balance')}</span><strong>{accountSummary.balance.toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {accountSummary.currency}</strong></div>
+            <div className="live-account-metric"><span>{l('Средства / equity', 'Equity')}</span><strong>{accountSummary.equity.toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {accountSummary.currency}</strong></div>
+            <div className="live-account-metric"><span>{l('Открытые сделки', 'Open trades')}</span><strong>{accountSummary.openPositionCount}</strong><small>{l('Занятая маржа', 'Margin used')}: {accountSummary.usedMargin.toFixed(2)} {accountSummary.currency}</small><small className={accountSummary.floatingPnl >= 0 ? 'positive-text' : 'negative-text'}>{l('Плавающий P&L', 'Floating P&L')}: {accountSummary.floatingPnl >= 0 ? '+' : ''}{accountSummary.floatingPnl.toFixed(2)} {accountSummary.currency}</small></div>
+            <div className="live-account-metric"><span>{l('Закрытый результат сегодня', 'Realized P&L today')}</span><strong className={accountSummary.realizedToday >= 0 ? 'positive-text' : 'negative-text'}>{accountSummary.realizedToday >= 0 ? '+' : ''}{accountSummary.realizedToday.toFixed(2)} {accountSummary.currency}</strong><small>{accountSummary.syncedAt ? `${l('Синхр.', 'Synced')} ${new Date(accountSummary.syncedAt).toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-GB')}` : l('Синхронизация…', 'Syncing…')}</small></div>
+          </section>}
           {availableUpdate && dismissedUpdateVersion !== availableUpdate.version && <div className="app-update-banner" role="status"><Bell size={15} /><span>{l(`Доступно обновление Money Work v${availableUpdate.version}.`, `Money Work v${availableUpdate.version} is available.`)}</span><button className="app-update-download" onClick={() => openAppRelease(availableUpdate.version)}>{l('Скачать', 'Download')} <ArrowUpRight size={13} /></button><button className="app-update-dismiss" aria-label={l('Скрыть уведомление', 'Dismiss update notice')} onClick={() => setDismissedUpdateVersion(availableUpdate.version)}><X size={14} /></button></div>}
           {!availableUpdate && updateMessage && <div className="update-check-message" role="status">{updateMessage}<button onClick={() => setUpdateMessage('')} aria-label={l('Закрыть', 'Dismiss')}><X size={13} /></button></div>}
           {mt5Error && <div className="connector-banner"><ShieldCheck size={15} /> {mt5Error}<button onClick={() => setMt5Error('')}>Dismiss</button></div>}
@@ -825,7 +896,7 @@ function App() {
                   <img className="realistic-earth-image" src={realisticEarth} alt="" />
                   <span className="earth-balance-copy"><small>{executionMode === 'paper' ? l('ВИРТУАЛЬНЫЙ БАЛАНС', 'PAPER BALANCE') : l('БАЛАНС СЧЁТА', 'ACCOUNT BALANCE')}</small><strong>{executionMode === 'paper' ? `${(Number(paperAgent.capital) + Number(paperAgent.realizedPnl || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} CAD` : mt5Account ? `${mt5Account.currency} ${Number(mt5Account.balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</strong><small>{referenceData ? `${l('AUD/CAD', 'AUD/CAD')} · ${Number(referenceData.rate).toFixed(5)}` : l('Баланс по центру', 'Balance overview')}</small></span>
                 </button>
-                <div className="overview-agent-footer center-agent-footer"><span>{researchRunning ? l('Данные обновляются раз в 15 минут', 'Reference refreshes every 15 minutes') : l('Нажмите Землю для запуска проверки', 'Tap Earth to start reference checks')}</span><small>{mt5Account ? `${mt5Account.login} · ${mt5Account.currency}` : l('Paper · CAD', 'Paper · CAD')}</small></div>
+                <div className="overview-agent-footer center-agent-footer"><span>{researchRunning ? l('Ориентир обновляется раз в 6 часов; анализ — на каждом новом тике MT5', 'Reference refreshes every 6h; analysis recalculates on each new MT5 tick') : l('Нажмите Землю для запуска проверки', 'Tap Earth to start reference checks')}</span><small>{mt5Account ? `${mt5Account.login} · ${mt5Account.currency}` : l('Paper · CAD', 'Paper · CAD')}</small></div>
               </article>
 
               <article className={`overview-agent-tile miner-agent-tile ${paperAgent.enabled ? 'agent-is-on' : ''}`}>
@@ -835,7 +906,7 @@ function App() {
               </article>
             </section>
             <article className="panel chart-panel dashboard-chart">
-              <div className="panel-heading chart-heading"><div className="instrument-title"><div className="pair-icon">{selectedSymbol.slice(0, 2)}</div><div><div className="pair-name">{selectedSymbol}</div><span>{liveQuote ? l('Живой поток MT5', 'Live MT5 feed') : l('Ожидание котировок MT5', 'Waiting for MT5 quotes')}</span></div></div><div className="chart-control-bar"><div className="timeframe-switcher">{['1M', '5M', '15M', '1H'].map((frame) => <button key={frame} onClick={() => { setTimeframe(frame); setOlderBarsOffset(0); }} className={timeframe === frame ? 'selected' : ''}>{frame}</button>)}</div><div className="chart-edit-tools"><button title={l('Показать более ранние свечи', 'Show older candles')} onClick={() => shiftChart(Math.max(5, Math.round(visibleBarCount * 0.65)))}>←</button><button title={l('Показать более новые свечи', 'Show newer candles')} onClick={() => shiftChart(-Math.max(5, Math.round(visibleBarCount * 0.65)))}>→</button><button title={l('Увеличить масштаб', 'Zoom in')} onClick={() => setVisibleBarCount((count) => Math.max(20, count - 10))}>−</button><button title={l('Уменьшить масштаб', 'Zoom out')} onClick={() => setVisibleBarCount((count) => Math.min(240, count + 10))}>＋</button><select aria-label={l('Стиль графика', 'Chart style')} value={chartStyle} onChange={(event) => setChartStyle(event.target.value)}><option value="candles">{l('Свечи', 'Candles')}</option><option value="line">{l('Линия', 'Line')}</option></select><label className="ma-editor"><input type="checkbox" checked={showMovingAverage} onChange={(event) => setShowMovingAverage(event.target.checked)} /><select aria-label={l('Тип средней скользящей', 'Moving average type')} value={movingAverageType} onChange={(event) => setMovingAverageType(event.target.value)}><option>SMA</option><option>EMA</option></select><input aria-label={l('Период средней скользящей', 'Moving average period')} type="number" min="2" max="200" value={movingAveragePeriod} onChange={(event) => setMovingAveragePeriod(Math.max(2, Math.min(200, Number(event.target.value) || 2)))} /></label></div></div></div>
+              <div className="panel-heading chart-heading"><div className="instrument-title"><div className="pair-icon">{selectedSymbol.slice(0, 2)}</div><div><div className="pair-name">{selectedSymbol}</div><span>{liveQuote ? `${l('Живой поток MT5', 'Live MT5 feed')}${quoteCadenceBySymbol[selectedSymbol] ? ` · ~${quoteCadenceBySymbol[selectedSymbol].averageMs} ms ${l('между тиками', 'between ticks')} · ${quoteCadenceBySymbol[selectedSymbol].sampleCount} ${l('интервалов', 'interval samples')}` : ` · ${l('измерение частоты тиков…', 'measuring tick cadence…')}`}` : l('Ожидание котировок MT5', 'Waiting for MT5 quotes')}</span></div></div><div className="chart-control-bar"><div className="timeframe-switcher">{['1M', '5M', '15M', '1H'].map((frame) => <button key={frame} onClick={() => { setTimeframe(frame); setOlderBarsOffset(0); }} className={timeframe === frame ? 'selected' : ''}>{frame}</button>)}</div><div className="chart-edit-tools"><button title={l('Показать более ранние свечи', 'Show older candles')} onClick={() => shiftChart(Math.max(5, Math.round(visibleBarCount * 0.65)))}>←</button><button title={l('Показать более новые свечи', 'Show newer candles')} onClick={() => shiftChart(-Math.max(5, Math.round(visibleBarCount * 0.65)))}>→</button><button title={l('Увеличить масштаб', 'Zoom in')} onClick={() => setVisibleBarCount((count) => Math.max(20, count - 10))}>−</button><button title={l('Уменьшить масштаб', 'Zoom out')} onClick={() => setVisibleBarCount((count) => Math.min(240, count + 10))}>＋</button><select aria-label={l('Стиль графика', 'Chart style')} value={chartStyle} onChange={(event) => setChartStyle(event.target.value)}><option value="candles">{l('Свечи', 'Candles')}</option><option value="line">{l('Линия', 'Line')}</option></select><label className="ma-editor"><input type="checkbox" checked={showMovingAverage} onChange={(event) => setShowMovingAverage(event.target.checked)} /><select aria-label={l('Тип средней скользящей', 'Moving average type')} value={movingAverageType} onChange={(event) => setMovingAverageType(event.target.value)}><option>SMA</option><option>EMA</option></select><input aria-label={l('Период средней скользящей', 'Moving average period')} type="number" min="2" max="200" value={movingAveragePeriod} onChange={(event) => setMovingAveragePeriod(Math.max(2, Math.min(200, Number(event.target.value) || 2)))} /></label></div></div></div>
               <div className="price-row"><strong>{liveQuote ? Number(liveQuote.bid).toFixed(5) : '—'}</strong><span className="price-change">{liveQuote ? 'LIVE' : l('НЕТ ДАННЫХ', 'NO DATA')}</span>{liveQuote && <span className="price-meta">Bid {Number(liveQuote.bid).toFixed(5)} · Ask {Number(liveQuote.ask).toFixed(5)}</span>}</div>
               {visibleChartBars.length ? <div className="chart-wrap chart-pan-area" onPointerDown={handleChartPointerDown} onPointerMove={handleChartPointerMove} onPointerUp={endChartPointer} onPointerCancel={endChartPointer} onWheel={handleChartWheel} title={l('Перетаскивайте график, прокручивайте для перемещения по истории', 'Drag the chart or scroll to pan through history')}><PricePlot bars={visibleChartBars} symbol={selectedSymbol} style={chartStyle} period={movingAveragePeriod} averageType={movingAverageType} showAverage={showMovingAverage} /></div> : <div className="empty-chart"><Activity size={22} /><strong>{l('График пока пуст', 'No chart data yet')}</strong><span>{mt5Account ? l('Выберите доступный символ на вкладке «Рынки».', 'Choose a broker symbol on the Markets tab.') : l('Подключите демо- или live-счёт MT5, чтобы загрузить рынки.', 'Connect an MT5 demo or live account to load markets.')}</span></div>}
               <div className="chart-foot"><span><i className="legend-dot blue-dot" />{liveQuote ? l('Котировка обновляется через MT5', 'Quote received from MT5') : l('Демо-данные не подставляются', 'No sample prices are shown')}</span><span>{liveQuote ? new Date((liveQuote.time || Date.now() / 1000) * 1000).toLocaleTimeString() : '—'}</span></div>
@@ -849,17 +920,17 @@ function App() {
           </section>}
 
           {activeNav === 'Agents' && <section className="page-section agents-page">
-            <div className="section-page-heading"><div><span className="section-kicker">{l('РАБОЧАЯ ПАНЕЛЬ АГЕНТОВ', 'AGENT CONTROL DESK')}</span><h1>{l('Автоторговля AUD/CAD', 'AUD/CAD auto trader')}</h1><p>{l('Режим Paper, MT5 Demo и MT5 Live. Анализ обновляется не чаще раза в 2 секунды; результативность не гарантируется.', 'Paper, MT5 Demo and MT5 Live modes. Analysis runs at most every 2 seconds; profitability is not guaranteed.')}</p></div></div>
+            <div className="section-page-heading"><div><span className="section-kicker">{l('РАБОЧАЯ ПАНЕЛЬ АГЕНТОВ', 'AGENT CONTROL DESK')}</span><h1>{l('Автоторговля AUD/CAD', 'AUD/CAD auto trader')}</h1><p>{l('Режим Paper, MT5 Demo и MT5 Live. Анализ реагирует на новые тики MT5; результативность не гарантируется.', 'Paper, MT5 Demo and MT5 Live modes. Local analysis follows new MT5 ticks; profitability is not guaranteed.')}</p></div></div>
             <div className="agent-control-grid">
               <article className="panel agent-control-card internet-control-card">
                 <div className="agent-control-heading"><div><span className="section-kicker"><Globe size={14} /> {l('АГЕНТ СБОРА ДАННЫХ', 'INTERNET DATA AGENT')}</span><h2>{l('Публичный ориентир AUD/CAD', 'Public AUD/CAD reference')}</h2></div><span className={`status-badge ${researchRunning ? '' : 'muted'}`}>{researchLoading ? l('СКАНИРОВАНИЕ', 'SCANNING') : researchRunning ? l('РАБОТАЕТ', 'RUNNING') : l('ПАУЗА', 'PAUSED')}</span></div>
-                <div className="research-feature"><div className={`globe-orb large-globe ${researchRunning ? 'spinning' : ''}`} style={{ '--globe-speed': `${Math.max(2, Math.min(24, 900 / Math.max(1, researchRate)))}s` }} aria-label={l('Глобус вращается во время работы агента', 'Globe rotates while the agent is running')}><span /><i /><b /></div><div className="research-value"><strong>{referenceData ? Number(referenceData.rate).toFixed(5) : '—'}</strong><small>AUD / CAD · {referenceData ? referenceData.sourceDate : l('ожидает первую проверку', 'awaiting first scan')}</small><small>{researchRate ? `${researchRate} ${l('проверок в минуту по скорости последнего цикла', 'checks per minute based on the latest scan')}` : l('Скорость появится после успешного запроса', 'Speed appears after the first successful request')}</small></div></div>
+                <div className="research-feature"><div className={`globe-orb large-globe ${researchRunning ? 'spinning' : ''}`} style={{ '--globe-speed': researchRunning ? '8s' : '24s' }} aria-label={l('Глобус вращается во время работы агента', 'Globe rotates while the agent is running')}><span /><i /><b /></div><div className="research-value"><strong>{referenceData ? Number(referenceData.rate).toFixed(5) : '—'}</strong><small>AUD / CAD · {referenceData ? referenceData.sourceDate : l('ожидает первую проверку', 'awaiting first scan')}</small><small>{l('Локальный анализ реагирует на новые тики; источник публикует дневной курс.', 'Local analysis reacts to new ticks; the reference source publishes a daily rate.')}</small></div></div>
                 <div className="research-results-list">{['response schema', 'publication date', 'AUD/CAD reference rate'].map((check, index) => { const result = referenceData?.checks?.find((item) => item.name === check); return <span key={check}><CircleCheck size={14} className={result?.ok ? 'check-ok' : 'check-pending'} />{l(['Формат ответа API', 'Дата публикации', 'Курс больше нуля'][index], check)}<b>{result ? (result.ok ? l('ПРОЙДЕНО', 'PASS') : l('ОШИБКА', 'FAIL')) : l('ОЖИДАЕТ', 'PENDING')}</b></span>; })}</div>
                 {referenceData && <p className="research-footnote">{l('Источник', 'Source')}: {referenceData.source || 'Frankfurter API'} · {l('время запроса', 'fetched')}: {new Date(referenceData.fetchedAt).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB')} · {l('публичный дневной справочный курс, не live-котировка.', 'public daily reference rate, not a live quote.')}</p>}
                 {referenceGapBps !== null && <div className="reference-comparison"><span>{l('Разница с mid MT5', 'Difference vs MT5 mid')}</span><strong className="neutral-text">{referenceGapBps >= 0 ? '+' : ''}{referenceGapBps.toFixed(1)} bps</strong><small>{l('Только сопоставление разных временных источников, не торговый сигнал.', 'Comparison across differently timed sources only, not a trading signal.')}</small></div>}
                 {researchStatus && researchStatus !== 'validated' && <div className="connection-error">{researchStatus}</div>}
-                <div className="agent-actions"><button className="modal-primary" onClick={runInternetResearch} disabled={researchLoading}><RefreshCw size={14} /> {researchLoading ? l('Сканирование…', 'Scanning…') : l('Проверить сейчас', 'Check now')}</button><button className="secondary-action" onClick={() => setResearchRunning((running) => !running)}>{researchRunning ? <Pause size={14} /> : <Play size={14} />}{researchRunning ? l('Остановить цикл', 'Pause schedule') : l('Запуск · раз в 15 мин', 'Start · every 15 min')}</button></div>
-                <p className="muted-copy">{l('Три проверки применяются к каждому ответу. Сервис публикует дневные справочные курсы; это не интернет-сканер всех сайтов, не live-поток и не генеративная ИИ-модель.', 'Three validation checks run on each response. The service publishes daily reference rates; this is not a crawler of all websites, a live feed, or a generative AI model.')}</p>
+                <div className="agent-actions"><button className="modal-primary" onClick={runInternetResearch} disabled={researchLoading}><RefreshCw size={14} /> {researchLoading ? l('Сканирование…', 'Scanning…') : l('Проверить сейчас', 'Check now')}</button><button className="secondary-action" onClick={() => setResearchRunning((running) => !running)}>{researchRunning ? <Pause size={14} /> : <Play size={14} />}{researchRunning ? l('Остановить цикл', 'Pause schedule') : l('Запуск · раз в 6 ч', 'Start · every 6h')}</button></div>
+                <p className="muted-copy">{l('Три проверки применяются к каждому ответу. Публичный источник обновляет дневной курс, поэтому опрос каждые 0,01 секунды не создаёт новых данных; технический анализ пересчитывается на каждом новом тике MT5.', 'Three checks validate each response. The public source publishes a daily rate, so polling it every 0.01 seconds would not create new data; technical analysis recalculates on each new MT5 tick.')}</p>
               </article>
 
               <article className="panel agent-control-card paper-control-card compact-agent-card">
@@ -889,7 +960,7 @@ function App() {
                   <small className="consensus-footnote">{l('Новая сделка требует всех трёх проверок. Дневной курс — только проверка источника, не live-котировка и не прогноз направления.', 'A new entry requires all three checks. The daily rate validates the source only; it is neither a live quote nor a directional forecast.')}</small>
                 </div>
                 {executionMode === 'mt5' && brokerAgentStatus && <div className={`broker-agent-message ${['error', 'daily_loss_stop', 'terminal_trading_disabled'].includes(brokerAgentStatus.state) ? 'error-state' : ''}`}><span>{brokerAgentStatus.message || brokerAgentStatus.learning || l('Последний цикл', 'Last cycle') + ': ' + brokerAgentStatus.state}</span><small>{brokerAgentStatus.winRate === null || brokerAgentStatus.winRate === undefined ? l('Обучение: ожидаются закрытые сделки', 'Learning: waiting for closed trades') : `${l('Доля прибыльных закрытых сделок', 'Closed-trade win rate')}: ${(brokerAgentStatus.winRate * 100).toFixed(0)}% · ${brokerAgentStatus.closedTrades} ${l('сделок', 'trades')} · ${brokerAgentStatus.consecutiveLosses || 0} ${l('убытков подряд', 'losses in a row')}`}</small></div>}
-                <div className="agent-actions compact-agent-actions"><button className={paperAgent.enabled ? 'modal-danger' : 'modal-primary'} onClick={startOrPauseAgent}>{paperAgent.enabled ? <Pause size={14} /> : <Play size={14} />}{paperAgent.enabled ? l('ВЫКЛ · ПАУЗА', 'OFF · PAUSE') : executionMode === 'paper' ? l('ВКЛ · PAPER', 'ON · PAPER') : executionMode === 'mt5' && mt5Account?.accountType === 'real' ? l('ВКЛ · LIVE', 'ON · LIVE') : l('ВКЛ · MT5 DEMO', 'ON · MT5 DEMO')}</button><span className="agent-feed-status"><Activity size={14} /> {paperAgent.enabled ? l('Новый тик проверяется каждые 2 сек.', 'Fresh ticks evaluated every 2 sec.') : l('Стратегия: EMA(20/50) + RSI(14)', 'Strategy: EMA(20/50) + RSI(14)')}</span></div>
+                <div className="agent-actions compact-agent-actions"><button className={paperAgent.enabled ? 'modal-danger' : 'modal-primary'} onClick={startOrPauseAgent}>{paperAgent.enabled ? <Pause size={14} /> : <Play size={14} />}{paperAgent.enabled ? l('ВЫКЛ · ПАУЗА', 'OFF · PAUSE') : executionMode === 'paper' ? l('ВКЛ · PAPER', 'ON · PAPER') : executionMode === 'mt5' && mt5Account?.accountType === 'real' ? l('ВКЛ · LIVE', 'ON · LIVE') : l('ВКЛ · MT5 DEMO', 'ON · MT5 DEMO')}</button><span className="agent-feed-status"><Activity size={14} /> {paperAgent.enabled ? l('Анализ на новых тиках · входы с защитным интервалом', 'Analysis on new ticks · entries remain risk-throttled') : l('Стратегия: EMA(20/50) + RSI(14)', 'Strategy: EMA(20/50) + RSI(14)')}</span></div>
                 <p className="muted-copy compact-agent-note">{l('Адаптация использует только закрытые результаты: после 5 сделок с win rate <40% фильтр входа ужесточается; 2 убытка подряд дают паузу на 1 час. Это не обучение нейросети и не гарантия безубыточности. ОТКЛ останавливает новые входы, но не закрывает уже открытую брокером позицию: её SL/TP остаются у брокера. SL не гарантирует цену исполнения при гэпе/проскальзывании.', 'Adaptation uses closed outcomes only: after 5 trades below 40% win rate, entry filter tightens; 2 consecutive losses pause entries for 1 hour. This is not neural-network learning or a no-loss guarantee. OFF stops new entries but does not close an existing broker position; its SL/TP remain at the broker. A stop does not guarantee execution price through gaps or slippage.')}</p>
               </article>
             </div>

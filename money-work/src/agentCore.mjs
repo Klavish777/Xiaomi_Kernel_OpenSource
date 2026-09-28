@@ -51,11 +51,51 @@ export function mergeMarketTick(previous, incoming, receivedAt = Date.now()) {
     const recoveringClockCorrection = previousSkew > 120000 && incomingAge >= -120000 && incomingAge <= 30000;
     if (!recoveringClockCorrection) return previous;
   }
+  if (sameTick) return previous;
+  return { ...incoming, receivedAt };
+}
+
+export function updateTickCadence(previous, quote) {
+  const timestamp = marketTimestampMs(quote);
+  if (!timestamp) return previous || { lastTimestamp: null, intervals: [], averageMs: null, sampleCount: 0 };
+  const lastTimestamp = Number(previous?.lastTimestamp);
+  if (Number.isFinite(lastTimestamp) && timestamp === lastTimestamp) return previous;
+  if (!Number.isFinite(lastTimestamp) || lastTimestamp <= 0 || timestamp < lastTimestamp || timestamp - lastTimestamp > 60000) {
+    return { lastTimestamp: timestamp, intervals: [], averageMs: null, sampleCount: 0 };
+  }
+  const intervals = [...(Array.isArray(previous?.intervals) ? previous.intervals : []), timestamp - lastTimestamp].slice(-20);
   return {
-    ...incoming,
-    receivedAt: sameTick && Number.isFinite(Number(previous?.receivedAt))
-      ? Number(previous.receivedAt)
-      : receivedAt,
+    lastTimestamp: timestamp,
+    intervals,
+    averageMs: Math.round(intervals.reduce((sum, value) => sum + value, 0) / intervals.length),
+    sampleCount: intervals.length,
+  };
+}
+
+export function mergeHistoryBars(existing, incoming, limit = 2000) {
+  const cap = Math.max(1, Math.min(2000, Math.floor(Number(limit) || 2000)));
+  const byTime = new Map();
+  for (const bar of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const time = Number(bar?.time);
+    if (Number.isFinite(time) && time > 0) byTime.set(time, { ...bar, time });
+  }
+  return [...byTime.values()].sort((left, right) => left.time - right.time).slice(-cap);
+}
+
+export function summarizeAccountPerformance(account, positions, deals, now = new Date()) {
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+  const openPositions = Array.isArray(positions) ? positions : [];
+  const todayDeals = (Array.isArray(deals) ? deals : []).filter((deal) => Number(deal?.time) >= dayStart);
+  const finite = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+  return {
+    balance: finite(account?.balance),
+    equity: finite(account?.equity),
+    usedMargin: finite(account?.margin),
+    currency: String(account?.currency || ''),
+    openPositionCount: openPositions.length,
+    floatingPnl: openPositions.reduce((sum, row) => sum + finite(row.profit) + finite(row.swap) + finite(row.commission), 0),
+    realizedToday: todayDeals.reduce((sum, row) => sum + finite(row.profit) + finite(row.commission) + finite(row.swap), 0),
+    syncedAt: Number(account?.syncedAt) || null,
   };
 }
 

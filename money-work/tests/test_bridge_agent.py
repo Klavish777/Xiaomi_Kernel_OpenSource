@@ -27,10 +27,14 @@ class FakeMT5(types.ModuleType):
     SYMBOL_TRADE_MODE_FULL = 4
     DEAL_ENTRY_OUT = 1
     DEAL_ENTRY_OUT_BY = 3
+    TIMEFRAME_M1 = 1
+    TIMEFRAME_M5 = 5
+    TIMEFRAME_M15 = 15
+    TIMEFRAME_H1 = 60
 
     def __init__(self):
         super().__init__('MetaTrader5')
-        self.account = SimpleNamespace(trade_mode=0, trade_allowed=True, balance=10000, login=123)
+        self.account = SimpleNamespace(trade_mode=0, trade_allowed=True, balance=10000, equity=10000, margin=350, login=123, server='Demo-Server', currency='CAD', leverage=100)
         self.terminal = SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
         self.symbol = SimpleNamespace(trade_mode=4, volume_min=0.01, volume_max=100, volume_step=0.01,
                                       digits=5, point=0.00001, trade_stops_level=0, trade_freeze_level=0)
@@ -38,6 +42,7 @@ class FakeMT5(types.ModuleType):
         self.positions = []
         self.deals = []
         self.requests = []
+        self.rate_requests = []
 
     def account_info(self):
         return self.account
@@ -56,6 +61,12 @@ class FakeMT5(types.ModuleType):
 
     def history_deals_get(self, _start, _end):
         return self.deals
+
+    def copy_rates_from_pos(self, symbol, timeframe, start, count):
+        self.rate_requests.append((symbol, timeframe, start, count))
+        base = int(datetime.now().timestamp())
+        return [{"time": base + index * 60, "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05,
+                 "tick_volume": 100, "spread": 2, "real_volume": 0} for index in range(min(count, 5))]
 
     def order_send(self, request):
         self.requests.append(dict(request))
@@ -91,7 +102,7 @@ def demo_command(**overrides):
 
 class BridgeAgentTests(unittest.TestCase):
     def setUp(self):
-        FAKE_MT5.account = SimpleNamespace(trade_mode=0, trade_allowed=True, balance=10000, login=123)
+        FAKE_MT5.account = SimpleNamespace(trade_mode=0, trade_allowed=True, balance=10000, equity=10000, margin=350, login=123, server='Demo-Server', currency='CAD', leverage=100)
         FAKE_MT5.terminal = SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
         FAKE_MT5.symbol = SimpleNamespace(trade_mode=4, volume_min=0.01, volume_max=100, volume_step=0.01,
                                           digits=5, point=0.00001, trade_stops_level=0, trade_freeze_level=0)
@@ -99,8 +110,31 @@ class BridgeAgentTests(unittest.TestCase):
         FAKE_MT5.positions = []
         FAKE_MT5.deals = []
         FAKE_MT5.requests = []
+        FAKE_MT5.rate_requests = []
         bridge._connected = True
         bridge._learning_cache.update({'login': None, 'loadedAt': 0.0, 'trades': []})
+
+    def test_account_snapshot_reads_updated_balance_equity_and_terminal_permissions(self):
+        first = bridge.get_account()
+        self.assertEqual(first['balance'], 10000)
+        self.assertEqual(first['equity'], 10000)
+        self.assertTrue(first['algorithmicTradingAllowed'])
+        FAKE_MT5.account.balance = 10024.5
+        FAKE_MT5.account.equity = 10030.25
+        refreshed = bridge.get_account()
+        self.assertEqual(refreshed['balance'], 10024.5)
+        self.assertEqual(refreshed['equity'], 10030.25)
+        FAKE_MT5.terminal.tradeapi_disabled = True
+        blocked = bridge.get_account()
+        self.assertTrue(blocked['externalApiTradingDisabled'])
+        self.assertFalse(blocked['algorithmicTradingAllowed'])
+
+    def test_history_fetch_accepts_small_incremental_count_and_caps_large_requests(self):
+        recent = bridge.get_history('AUDCAD', '1M', 3)
+        self.assertEqual(len(recent), 3)
+        self.assertEqual(FAKE_MT5.rate_requests[-1], ('AUDCAD', FAKE_MT5.TIMEFRAME_M1, 0, 3))
+        bridge.get_history('AUDCAD', '1M', 99999)
+        self.assertEqual(FAKE_MT5.rate_requests[-1][-1], 2000)
 
     def test_equal_start_end_schedule_allows_the_selected_full_day(self):
         result = bridge.evaluate_agent(demo_command(schedule={'start': '00:00', 'end': '00:00', 'days': list(range(7))}))
