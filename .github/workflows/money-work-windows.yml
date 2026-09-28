@@ -36,10 +36,10 @@ jobs:
       contents: read
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python for the MT5 bridge
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -63,7 +63,7 @@ jobs:
           }
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -139,7 +139,7 @@ jobs:
           }
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Money-Work-Windows-Installer-${{ github.run_id }}
           path: money-work/release/Money-Work-Setup-${{ steps.version.outputs.version }}.exe
@@ -154,10 +154,10 @@ jobs:
       contents: write
     steps:
       - name: Check out the tested branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download the installer from the successful test/build job
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: Money-Work-Windows-Installer-${{ github.run_id }}
           path: money-work/release
