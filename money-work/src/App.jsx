@@ -459,7 +459,16 @@ function App() {
           setLiveTradeConfirmed(false);
         }
       }).catch((error) => {
-        setBrokerAgentStatus({ state: 'error', message: error.message });
+        const rawMessage = String(error?.message || error || 'MT5 agent request failed.');
+        const algoTradingDisabled = /(?:algorithmic|algo) trading.*disabled|disabled.*(?:algorithmic|algo) trading|tradeapi_disabled/i.test(rawMessage);
+        const message = algoTradingDisabled
+          ? l(
+            'MT5 запретил внешнюю автоторговлю. В том же терминале откройте Сервис → Настройки → Советники, разрешите алгоритмическую торговлю и внешнее Python API, включите кнопку Algo Trading, затем переподключите счёт в Money Work и запустите агента снова.',
+            'MT5 has blocked algorithmic trading. In the same terminal, open Tools → Options → Expert Advisors, allow algorithmic trading and the external Python API, enable the Algo Trading toolbar button, then reconnect the account in Money Work and start the agent again.',
+          )
+          : rawMessage;
+        setBrokerAgentStatus({ state: algoTradingDisabled ? 'terminal_trading_disabled' : 'error', message });
+        setMt5Error(message);
         setPaperAgent((current) => ({ ...current, enabled: false }));
         setLiveTradeConfirmed(false);
       }).finally(() => { brokerEvaluateBusy.current = false; });
@@ -794,7 +803,7 @@ function App() {
                   </div>
                   <small className="consensus-footnote">{l('Новая сделка требует всех трёх проверок. Дневной курс — только проверка источника, не live-котировка и не прогноз направления.', 'A new entry requires all three checks. The daily rate validates the source only; it is neither a live quote nor a directional forecast.')}</small>
                 </div>
-                {executionMode === 'mt5' && brokerAgentStatus && <div className={`broker-agent-message ${brokerAgentStatus.state === 'error' || brokerAgentStatus.state === 'daily_loss_stop' ? 'error-state' : ''}`}><span>{brokerAgentStatus.message || brokerAgentStatus.learning || l('Последний цикл', 'Last cycle') + ': ' + brokerAgentStatus.state}</span><small>{brokerAgentStatus.winRate === null || brokerAgentStatus.winRate === undefined ? l('Обучение: ожидаются закрытые сделки', 'Learning: waiting for closed trades') : `${l('Доля прибыльных закрытых сделок', 'Closed-trade win rate')}: ${(brokerAgentStatus.winRate * 100).toFixed(0)}% · ${brokerAgentStatus.closedTrades} ${l('сделок', 'trades')} · ${brokerAgentStatus.consecutiveLosses || 0} ${l('убытков подряд', 'losses in a row')}`}</small></div>}
+                {executionMode === 'mt5' && brokerAgentStatus && <div className={`broker-agent-message ${['error', 'daily_loss_stop', 'terminal_trading_disabled'].includes(brokerAgentStatus.state) ? 'error-state' : ''}`}><span>{brokerAgentStatus.message || brokerAgentStatus.learning || l('Последний цикл', 'Last cycle') + ': ' + brokerAgentStatus.state}</span><small>{brokerAgentStatus.winRate === null || brokerAgentStatus.winRate === undefined ? l('Обучение: ожидаются закрытые сделки', 'Learning: waiting for closed trades') : `${l('Доля прибыльных закрытых сделок', 'Closed-trade win rate')}: ${(brokerAgentStatus.winRate * 100).toFixed(0)}% · ${brokerAgentStatus.closedTrades} ${l('сделок', 'trades')} · ${brokerAgentStatus.consecutiveLosses || 0} ${l('убытков подряд', 'losses in a row')}`}</small></div>}
                 <div className="agent-actions compact-agent-actions"><button className={paperAgent.enabled ? 'modal-danger' : 'modal-primary'} onClick={startOrPauseAgent}>{paperAgent.enabled ? <Pause size={14} /> : <Play size={14} />}{paperAgent.enabled ? l('ВЫКЛ · ПАУЗА', 'OFF · PAUSE') : executionMode === 'paper' ? l('ВКЛ · PAPER', 'ON · PAPER') : executionMode === 'mt5' && mt5Account?.accountType === 'real' ? l('ВКЛ · LIVE', 'ON · LIVE') : l('ВКЛ · MT5 DEMO', 'ON · MT5 DEMO')}</button><span className="agent-feed-status"><Activity size={14} /> {paperAgent.enabled ? l('Новый тик проверяется каждые 2 сек.', 'Fresh ticks evaluated every 2 sec.') : l('Стратегия: EMA(20/50) + RSI(14)', 'Strategy: EMA(20/50) + RSI(14)')}</span></div>
                 <p className="muted-copy compact-agent-note">{l('Адаптация использует только закрытые результаты: после 5 сделок с win rate <40% фильтр входа ужесточается; 2 убытка подряд дают паузу на 1 час. Это не обучение нейросети и не гарантия безубыточности. ОТКЛ останавливает новые входы, но не закрывает уже открытую брокером позицию: её SL/TP остаются у брокера. SL не гарантирует цену исполнения при гэпе/проскальзывании.', 'Adaptation uses closed outcomes only: after 5 trades below 40% win rate, entry filter tightens; 2 consecutive losses pause entries for 1 hour. This is not neural-network learning or a no-loss guarantee. OFF stops new entries but does not close an existing broker position; its SL/TP remain at the broker. A stop does not guarantee execution price through gaps or slippage.')}</p>
               </article>

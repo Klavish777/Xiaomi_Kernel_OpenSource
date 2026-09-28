@@ -1,4 +1,4 @@
-# Money Work — v0.4.13
+# Money Work — v0.4.14
 
 Windows MT5 dashboard for AUD/CAD chart analysis, internet reference checks, configurable paper funds, and a manually armed automated MT5 strategy runner. On standard desktop resolutions, Overview and Agents use a compact fixed-height layout so the primary controls and information fit without page-level vertical scrolling; dense history/market lists remain locally contained. The internet source publishes daily public reference rates, not live execution prices. The chart and strategy signals use broker MT5 data.
 
@@ -23,6 +23,10 @@ Windows MT5 dashboard for AUD/CAD chart analysis, internet reference checks, con
 - The chart can load up to 2,000 MT5 candles per selected timeframe. Drag or wheel to pan in history; use the controls for zoom, candle/line display, and a toggleable SMA/EMA with an editable period.
 - The interactive strategy catalog includes 11 common FX approaches (trend, range, breakout, session, price action and swap context). Only EMA/RSI is currently wired into the automatic runner; other catalog entries are research descriptions, not live trading strategies or promises of performance.
 - The internet checker requests AUD/CAD from the public Frankfurter API (`https://api.frankfurter.dev/v1/latest?base=AUD&symbols=CAD`) on demand or every 15 minutes. It validates response schema, publication date, and positive rate. Its globe animates while the agent is running and uses the last observed validation speed. This is a daily reference value—not a synchronized live quote, trading signal, web crawler, or self-training AI.
+
+### MT5 algorithmic trading permission
+
+If the bridge reports that algorithmic trading or the external Python API is disabled, Money Work stops that run instead of bypassing the terminal safety setting. In the same MT5 terminal, enable the Algo Trading toolbar control, then open **Tools → Options → Expert Advisors** and allow algorithmic trading and the external Python API. Reconnect the account in Money Work and explicitly start the agent again. Existing broker-side safeguards and live confirmation still apply.
 
 ## Windows setup
 
