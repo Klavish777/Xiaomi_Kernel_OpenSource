@@ -53,4 +53,4 @@ npm run dev
 
 `npm test` runs JavaScript analyst-consensus, quote timestamp/cadence, chart and reference-validation tests, plus Python unit tests for risk policy and mocked broker execution. Coverage includes live confirmation, the 0.01-lot cap, pip and cash-profit targets, the 80-million account-currency stop, stale prices, manual-position conflicts, spread limits, daily loss stops, reference-gate behavior, closure without a reference, and adaptive cooldowns. Tests do not connect to a personal brokerage account.
 
-The Windows workflow bundles the MT5/NumPy connector, smoke-tests it, runs tests, verifies a public AUD/CAD daily reference, builds the installer and uploads it as a CI artifact. Stable V1.0 publication remains manually gated and must wait for the user's MT5 Demo device verification.
+The Windows workflow bundles the MT5/NumPy connector, smoke-tests it, runs tests, verifies a public AUD/CAD daily reference, builds the installer and uploads it as a CI artifact. Stable V1.0 publication is manually gated by both the `publish` and `verified_demo` workflow inputs and must wait for the user's MT5 Demo device verification.
