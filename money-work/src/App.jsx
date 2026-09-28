@@ -5,10 +5,26 @@ import './manual.css';
 import './positions.css';
 import './action-controls.css';
 import './account-summary.css';
+import './assistant.css';
 
 const SYMBOL_PREFIX = 'AUDCAD';
 const TIMEFRAME = '15M';
 const QUOTE_FRESH_MS = 30000;
+const ASSISTANT_SETTINGS_KEY = 'money-work-assistant-settings-v1';
+const DEFAULT_ASSISTANT_SETTINGS = Object.freeze({ compact: false, showSummary: true, showPositions: true });
+
+function readAssistantSettings() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(ASSISTANT_SETTINGS_KEY) || '{}');
+    return {
+      compact: stored.compact === true,
+      showSummary: stored.showSummary !== false,
+      showPositions: stored.showPositions !== false,
+    };
+  } catch (_) {
+    return { ...DEFAULT_ASSISTANT_SETTINGS };
+  }
+}
 
 function price(value, digits = 5) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—';
@@ -79,6 +95,10 @@ export default function App() {
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [notice, setNotice] = useState('');
+  const [assistantSettings, setAssistantSettings] = useState(readAssistantSettings);
+  const [assistantCommand, setAssistantCommand] = useState('');
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const [assistantMessage, setAssistantMessage] = useState('');
   const actionBusyRef = useRef(false);
   const [now, setNow] = useState(Date.now());
   const symbolRef = useRef(symbol);
@@ -350,22 +370,56 @@ export default function App() {
     setLiveText('');
   }
 
-  return <main className="mw-app">
+  async function submitAssistantCommand(event) {
+    event.preventDefault();
+    const command = assistantCommand.trim();
+    if (!command || assistantBusy) return;
+    if (!window.moneyWork?.askLocalAssistant) {
+      setAssistantMessage('Локальный помощник доступен в установленном приложении Money Work.');
+      return;
+    }
+    setAssistantBusy(true);
+    setAssistantMessage('Запрос обрабатывается локальной моделью…');
+    try {
+      const result = await window.moneyWork.askLocalAssistant({ command, currentSettings: assistantSettings });
+      const changes = Object.fromEntries(
+        Object.entries(result?.changes || {}).filter(([key, value]) => ['compact', 'showSummary', 'showPositions'].includes(key) && typeof value === 'boolean'),
+      );
+      const applied = Object.entries(changes).filter(([key, value]) => assistantSettings[key] !== value).map(([key]) => ({
+        compact: 'компактный режим',
+        showSummary: 'сводка счёта',
+        showPositions: 'список открытых сделок',
+      })[key]);
+      if (Object.keys(changes).length) {
+        const next = { ...assistantSettings, ...changes };
+        setAssistantSettings(next);
+        try { window.localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(next)); } catch (_) { /* settings still apply for this session */ }
+      }
+      const actualChanges = applied.length ? ` · Применено: ${applied.join(', ')}.` : '';
+      setAssistantMessage(`${String(result?.reply || 'Готово.').slice(0, 1600)}${actualChanges}`);
+    } catch (reason) {
+      setAssistantMessage(reason?.message || String(reason));
+    } finally {
+      setAssistantBusy(false);
+    }
+  }
+
+  return <main className={`mw-app${assistantSettings.compact ? ' mw-compact' : ''}`}>
     <button className="settings-button" type="button" onClick={openSettings} aria-label="Настройки MT5" title="Настройки MT5"><Settings size={20} /></button>
     <section className="dashboard-top">
       <section className="chart-area" aria-label="График MT5">
         <span className="chart-symbol">{symbol || 'AUDCAD'} · {TIMEFRAME}</span>
         <PriceChart bars={bars} symbol={symbol} />
       </section>
-      <aside className="account-summary" aria-label="Баланс аккаунта">
+      {assistantSettings.showSummary && <aside className="account-summary" aria-label="Баланс аккаунта">
         <div className="summary-heading"><strong>АККАУНТ</strong><span className={account?.accountType === 'real' ? 'live-badge' : 'demo-badge'}>{account ? account.accountType.toUpperCase() : 'MT5'}</span></div>
         <div className="summary-metric"><span>Всего на балансе</span><strong>{account ? accountMoney(account.balance, account.currency) : '—'}</strong></div>
         <div className="summary-metric"><span>Заложено в работу</span><strong>{account ? accountMoney(account.margin, account.currency) : '—'}</strong><small>Маржа MT5</small></div>
         <div className="summary-metric"><span>Доход</span><strong className={income < 0 ? 'income-negative' : 'income-positive'}>{account ? cash(income, account.currency) : '—'}</strong><small>Плавающий P/L открытых сделок</small></div>
         {!account && <div className="summary-connect">Подключите MT5, чтобы увидеть показатели счёта.</div>}
-      </aside>
+      </aside>}
     </section>
-    <section className="positions-panel" aria-label="Открытые сделки MT5">
+    {assistantSettings.showPositions && <section className="positions-panel" aria-label="Открытые сделки MT5">
       <div className="positions-heading">
         <div><strong>Открытые сделки</strong><span>{account ? `${positions.length} · ${account.currency || 'валюта счёта'}` : 'Подключите MT5'}</span></div>
         {account && <button className="positions-refresh" type="button" aria-label="Обновить открытые сделки" title="Обновить" disabled={positionsBusy} onClick={syncPositions}><RefreshCw size={15} className={positionsBusy ? 'spin' : ''} /></button>}
@@ -383,6 +437,18 @@ export default function App() {
           <button className="close-position-button" type="button" disabled={actionBusy || Boolean(pendingAction)} onClick={() => beginClosePosition(position)} aria-label={`Закрыть ${position.side} ${position.symbol}, позиция ${position.ticket}`}><CircleX size={15} /> Закрыть</button>
         </div>)}
       </div>}
+    </section>}
+    <section className="local-assistant-panel" aria-label="Локальный AI-помощник">
+      <div className="local-assistant-heading">
+        <div><strong>Локальный AI-помощник</strong><span>Ollama · Qwen2.5 3B · работает на этом компьютере</span></div>
+        <span className="assistant-local-badge">LOCAL</span>
+      </div>
+      <form className="assistant-form" onSubmit={submitAssistantCommand}>
+        <textarea aria-label="Команда локальному помощнику" maxLength={600} rows={2} value={assistantCommand} onChange={(event) => setAssistantCommand(event.target.value)} placeholder="Например: сделай интерфейс компактнее и скрой список сделок" />
+        <button type="submit" disabled={assistantBusy || !assistantCommand.trim()}>{assistantBusy ? <><LoaderCircle size={15} className="spin" /> Думаю…</> : 'Выполнить'}</button>
+      </form>
+      {assistantMessage && <div className="assistant-message" role="status" aria-live="polite">{assistantMessage}</div>}
+      <p className="assistant-note">Может менять только вид интерфейса: компактность, сводку счёта и список сделок. Не управляет торговлей, защитами или кодом. Нужны установленная Ollama и модель qwen2.5:3b.</p>
     </section>
     {pendingAction && <form className="live-action-panel" onSubmit={submitLiveAction}>
       <div className="live-action-copy">

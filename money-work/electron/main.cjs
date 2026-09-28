@@ -234,6 +234,81 @@ ipcMain.handle('mt5:close-position', async (_event, payload) => {
   return result.result;
 });
 
+ipcMain.handle('assistant:command', async (_event, payload) => {
+  const command = String(payload?.command || '').trim();
+  if (!command || command.length > 600) throw new Error('Введите команду длиной не более 600 символов.');
+  const currentSettings = {
+    compact: payload?.currentSettings?.compact === true,
+    showSummary: payload?.currentSettings?.showSummary !== false,
+    showPositions: payload?.currentSettings?.showPositions !== false,
+  };
+  const responseSchema = {
+    type: 'object',
+    properties: {
+      reply: { type: 'string' },
+      changes: {
+        type: 'object',
+        properties: {
+          compact: { type: 'boolean' },
+          showSummary: { type: 'boolean' },
+          showPositions: { type: 'boolean' },
+        },
+        additionalProperties: false,
+      },
+    },
+    required: ['reply', 'changes'],
+    additionalProperties: false,
+  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90000);
+  let result;
+  try {
+    const httpResponse = await fetch('http://127.0.0.1:11434/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: 'qwen2.5:3b',
+        stream: false,
+        format: responseSchema,
+        messages: [
+          {
+            role: 'system',
+            content: 'Ты локальный помощник интерфейса Money Work. Отвечай на языке пользователя. Разрешено менять только три визуальные настройки: compact (компактный режим), showSummary (правая сводка баланса/маржи/дохода), showPositions (список открытых сделок). Возвращай только JSON по заданной схеме. Если команда не относится к этим настройкам, верни changes пустым объектом и объясни ограничение в reply. Никогда не вызывай, не предлагай и не симулируй открытие или закрытие сделок. Не меняй объём, SL/TP, дневной стоп, ограничения счёта, подтверждение LIVE, котировки, терминальные разрешения или код приложения.',
+          },
+          {
+            role: 'user',
+            content: `Текущие визуальные настройки: ${JSON.stringify(currentSettings)}; Команда: ${command}`,
+          },
+        ],
+        options: { temperature: 0.1 },
+      }),
+    });
+    const body = await httpResponse.json().catch(() => ({}));
+    if (!httpResponse.ok) throw new Error(body.error || `Ollama ответила HTTP ${httpResponse.status}.`);
+    const content = body?.message?.content;
+    if (typeof content !== 'string') throw new Error('Локальная модель вернула пустой ответ.');
+    result = JSON.parse(content);
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('Локальная модель не ответила за 90 секунд.');
+    if (String(error?.message || '').includes('fetch failed') || error?.cause?.code === 'ECONNREFUSED') {
+      throw new Error('Не удалось подключиться к Ollama на этом компьютере. Запустите Ollama и установите модель qwen2.5:3b.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!result || typeof result.reply !== 'string' || !result.changes || typeof result.changes !== 'object') {
+    throw new Error('Локальная модель вернула ответ в неподдерживаемом формате.');
+  }
+  const changes = {};
+  for (const key of ['compact', 'showSummary', 'showPositions']) {
+    if (typeof result.changes[key] === 'boolean') changes[key] = result.changes[key];
+  }
+  return { reply: result.reply.slice(0, 1600), changes };
+});
+
 ipcMain.handle('mt5:manual-order', async (_event, payload) => {
   if (!payload || !/^AUDCAD[A-Z0-9.+_-]*$/i.test(String(payload.symbol || ''))) {
     throw new Error('Manual Buy/Sell is currently limited to the broker AUDCAD symbol.');

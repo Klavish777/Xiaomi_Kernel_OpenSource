@@ -70,6 +70,14 @@ test('renderer, Electron IPC and Python bridge expose no automatic strategy or p
   assert.match(sources[0], /Заложено в работу/);
   assert.match(sources[0], /Плавающий P\/L открытых сделок/);
   assert.match(sources[0], /account\.margin/);
+  assert.match(sources[0], /askLocalAssistant/);
+  assert.match(sources[0], /только вид интерфейса/);
+  assert.match(sources[1], /http:\/\/127\.0\.0\.1:11434\/api\/chat/);
+  assert.match(sources[1], /model: 'qwen2\.5:3b'/);
+  assert.match(sources[1], /for \(const key of \['compact', 'showSummary', 'showPositions'\]\)/);
+  assert.match(sources[2], /askLocalAssistant: \(payload\) => ipcRenderer\.invoke\('assistant:command'/);
+  const assistantHandler = sources[1].split("ipcMain.handle('assistant:command'")[1]?.split("ipcMain.handle('mt5:manual-order'")[0] || '';
+  assert.doesNotMatch(assistantHandler, /bridgeRequest|mt5:manual-order|mt5:close-position/);
   assert.match(sources[0], /void sendManualOrder\(side\)/);
   assert.match(sources[0], /void sendPositionClose\(position\)/);
   assert.match(sources[0], /Введите LIVE/);

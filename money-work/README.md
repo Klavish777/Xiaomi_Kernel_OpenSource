@@ -1,6 +1,12 @@
 # Money Work
 
-Money Work has one compact trading screen: a live AUDCAD MT5 chart, a right-side account summary (balance, used margin and floating open-position P/L), an **open positions list with manual close controls**, and **manual BUY / SELL buttons**. The gear opens the MT5 connection settings. No analysis tools, strategies, agents, or in-app virtual balance are included. The chart uses the broker's AUDCAD symbol (including its suffix, if present) on a fixed 15-minute timeframe.
+Money Work has one compact trading screen: a live AUDCAD MT5 chart, a right-side account summary (balance, used margin and floating open-position P/L), an **open positions list with manual close controls**, **manual BUY / SELL buttons**, and an optional local AI helper for visual interface settings. The gear opens the MT5 connection settings. No automatic strategies or in-app virtual balance are included. The chart uses the broker's AUDCAD symbol (including its suffix, if present) on a fixed 15-minute timeframe.
+
+## Optional local AI helper
+
+The helper runs through **Ollama on the same computer** using the `qwen2.5:3b` model. Install Ollama, then run `ollama pull qwen2.5:3b` once; the model download is not bundled with Money Work. The app connects only to Ollama's local `127.0.0.1:11434` endpoint, and assistant commands/account details are not sent to a cloud AI service by Money Work. If Ollama is not running or the model is missing, the rest of the app continues to work normally.
+
+For safety, natural-language commands can currently change only presentation settings: compact layout, the account-summary panel, and the open-positions panel. They cannot place or close orders, edit trading risk limits or permissions, alter MT5 settings, or rewrite application code. Changes to the program itself require a reviewed code patch and a new build; an installed EXE cannot safely rewrite its own code on the fly. The existing Demo/Live safeguards and manual trade controls are unchanged.
 
 ## MT5 connection and manual orders
 
