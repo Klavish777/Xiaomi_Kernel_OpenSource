@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, CandlestickChart, LoaderCircle, Settings, ShieldCheck, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CandlestickChart, CircleX, LoaderCircle, RefreshCw, Settings, ShieldCheck, X } from 'lucide-react';
 import { mergeHistoryBars, mergeMarketTick, mergeTickIntoBars } from './chartUtils.mjs';
 import './manual.css';
+import './positions.css';
 
 const SYMBOL_PREFIX = 'AUDCAD';
 const TIMEFRAME = '15M';
@@ -9,6 +10,12 @@ const QUOTE_FRESH_MS = 30000;
 
 function price(value, digits = 5) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—';
+}
+
+function cash(value, currency = '') {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
+  return `${amount > 0 ? '+' : ''}${amount.toFixed(2)} ${currency}`.trim();
 }
 
 function PriceChart({ bars, symbol }) {
@@ -52,9 +59,14 @@ export default function App() {
   const [symbol, setSymbol] = useState('');
   const [quote, setQuote] = useState(null);
   const [bars, setBars] = useState([]);
+  const [positions, setPositions] = useState([]);
+  const [positionsBusy, setPositionsBusy] = useState(false);
+  const [positionsError, setPositionsError] = useState('');
+  const [selectedPosition, setSelectedPosition] = useState(null);
   const [modal, setModal] = useState('');
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [orderBusy, setOrderBusy] = useState(false);
+  const [closeBusy, setCloseBusy] = useState(false);
   const [form, setForm] = useState({ login: '', password: '', server: '', remember: true });
   const [orderSide, setOrderSide] = useState('');
   const [liveText, setLiveText] = useState('');
@@ -65,6 +77,7 @@ export default function App() {
   const quoteRef = useRef(null);
   const accountRef = useRef(null);
   const syncLock = useRef(false);
+  const positionsLock = useRef(false);
   const historyLock = useRef(false);
   const pendingHistoryRef = useRef(null);
   const startupPromiseRef = useRef(null);
@@ -86,6 +99,22 @@ export default function App() {
     } catch (reason) {
       setError(reason?.message || String(reason));
     } finally { syncLock.current = false; }
+  }, []);
+
+  const syncPositions = useCallback(async () => {
+    if (!window.moneyWork || positionsLock.current || !accountRef.current) return;
+    positionsLock.current = true;
+    setPositionsBusy(true);
+    try {
+      const rows = await window.moneyWork.getMt5Positions();
+      setPositions(Array.isArray(rows) ? rows : []);
+      setPositionsError('');
+    } catch (reason) {
+      setPositionsError(reason?.message || String(reason));
+    } finally {
+      positionsLock.current = false;
+      setPositionsBusy(false);
+    }
   }, []);
 
   const loadHistory = useCallback(async (selectedSymbol = symbolRef.current, initial = false) => {
@@ -128,8 +157,8 @@ export default function App() {
     setQuote(quoteRef.current);
     setBars([]);
     await syncAccount();
-    await loadHistory(chosen, true);
-  }, [loadHistory, syncAccount]);
+    await Promise.all([loadHistory(chosen, true), syncPositions()]);
+  }, [loadHistory, syncAccount, syncPositions]);
 
   const acceptConnectedAccountRef = useRef(acceptConnectedAccount);
   useEffect(() => { acceptConnectedAccountRef.current = acceptConnectedAccount; }, [acceptConnectedAccount]);
@@ -162,8 +191,9 @@ export default function App() {
     if (!account) return undefined;
     const accountTimer = setInterval(syncAccount, 100);
     const historyTimer = setInterval(() => loadHistory(symbol, false), 1000);
-    return () => { clearInterval(accountTimer); clearInterval(historyTimer); };
-  }, [account !== null, loadHistory, symbol, syncAccount]);
+    const positionsTimer = setInterval(syncPositions, 1000);
+    return () => { clearInterval(accountTimer); clearInterval(historyTimer); clearInterval(positionsTimer); };
+  }, [account !== null, loadHistory, symbol, syncAccount, syncPositions]);
 
   const quoteFresh = Boolean(quote && Number(quote.bid) > 0 && Number(quote.ask) > 0 && now - Number(quote.receivedAt) <= QUOTE_FRESH_MS);
   const digits = /JPY/i.test(symbol) ? 3 : 5;
@@ -204,7 +234,7 @@ export default function App() {
     accountRef.current = null;
     quoteRef.current = null;
     symbolRef.current = '';
-    setAccount(null); setQuote(null); setSymbol(''); setBars([]);
+    setAccount(null); setQuote(null); setSymbol(''); setBars([]); setPositions([]);
   }
 
   function beginOrder(side) {
@@ -232,9 +262,41 @@ export default function App() {
       setNotice(`Ордер отправлен: ${result.side} ${result.volume} ${result.symbol} · ${price(result.entry, digits)}`);
       setModal('');
       window.setTimeout(() => setNotice(''), 4000);
-      await syncAccount();
+      await Promise.all([syncAccount(), syncPositions()]);
     } catch (reason) { setError(reason?.message || String(reason)); }
     finally { setOrderBusy(false); }
+  }
+
+  function beginClosePosition(position) {
+    setError('');
+    setNotice('');
+    setSelectedPosition(position);
+    setLiveText('');
+    setModal('close-position');
+  }
+
+  async function submitClosePosition(event) {
+    event.preventDefault();
+    if (!account || !selectedPosition || closeBusy) return;
+    if (account.accountType === 'real' && liveText.trim() !== 'LIVE') return;
+    setCloseBusy(true);
+    setError('');
+    try {
+      const result = await window.moneyWork.closeMt5Position({
+        ticket: selectedPosition.ticket,
+        symbol: selectedPosition.symbol,
+        side: selectedPosition.side,
+        volume: selectedPosition.volume,
+        confirmed: true,
+        liveConfirmed: account.accountType === 'real' && liveText.trim() === 'LIVE',
+      });
+      setNotice(`Позиция закрыта: ${result.side} ${result.volume} ${result.symbol}`);
+      setModal('');
+      setSelectedPosition(null);
+      window.setTimeout(() => setNotice(''), 5000);
+      await Promise.all([syncAccount(), syncPositions()]);
+    } catch (reason) { setError(reason?.message || String(reason)); }
+    finally { setCloseBusy(false); }
   }
 
   return <main className="mw-app">
@@ -242,6 +304,25 @@ export default function App() {
     <section className="chart-area" aria-label="График MT5">
       <span className="chart-symbol">{symbol || 'AUDCAD'} · {TIMEFRAME}</span>
       <PriceChart bars={bars} symbol={symbol} />
+    </section>
+    <section className="positions-panel" aria-label="Открытые сделки MT5">
+      <div className="positions-heading">
+        <div><strong>Открытые сделки</strong><span>{account ? `${positions.length} · ${account.currency || 'валюта счёта'}` : 'Подключите MT5'}</span></div>
+        {account && <button className="positions-refresh" type="button" aria-label="Обновить открытые сделки" title="Обновить" disabled={positionsBusy} onClick={syncPositions}><RefreshCw size={15} className={positionsBusy ? 'spin' : ''} /></button>}
+      </div>
+      {positionsError && <div className="positions-status error-text" role="alert">{positionsError}</div>}
+      {!account && <div className="positions-status">Открытые позиции появятся после подключения счёта MT5.</div>}
+      {account && positions.length === 0 && !positionsError && <div className="positions-status">{positionsBusy ? 'Загрузка…' : 'Открытых сделок нет.'}</div>}
+      {positions.length > 0 && <div className="positions-scroll">
+        <div className="positions-row positions-columns" aria-hidden="true"><span>Инструмент</span><span>Направление</span><span>Объём</span><span>Плавающий P/L</span><span /></div>
+        {positions.map((position) => <div className="positions-row" key={position.ticket}>
+          <span className="position-symbol"><strong>{position.symbol}</strong><small>#{position.ticket}</small></span>
+          <span className={`position-side ${position.side === 'BUY' ? 'buy-text' : 'sell-text'}`}>{position.side}</span>
+          <span>{Number(position.volume).toFixed(2)}</span>
+          <span className={Number(position.netProfit) < 0 ? 'sell-text' : 'buy-text'}>{cash(position.netProfit, account?.currency)}</span>
+          <button className="close-position-button" type="button" onClick={() => beginClosePosition(position)} aria-label={`Закрыть ${position.side} ${position.symbol}, позиция ${position.ticket}`}><CircleX size={15} /> Закрыть</button>
+        </div>)}
+      </div>}
     </section>
     <section className="trade-buttons" aria-label="Ручная торговля">
       <button className="buy-button" type="button" onClick={() => beginOrder('BUY')}><ArrowUp size={21} /> BUY</button>
@@ -284,6 +365,23 @@ export default function App() {
         <p className="order-warning"><ShieldCheck size={15} /> Ордер отправляется в MT5. Исполнение, проскальзывание и возможный убыток зависят от брокера.</p>
         {error && <p className="modal-error" role="alert">{error}</p>}
         <div className="modal-actions"><button className="cancel-button" type="button" disabled={orderBusy} onClick={() => setModal('')}>Отмена</button><button className={orderSide === 'BUY' ? 'confirm-buy' : 'confirm-sell'} type="submit" disabled={orderBusy || (account?.accountType === 'real' && liveText.trim() !== 'LIVE')}>{orderBusy ? 'Отправка…' : `Подтвердить ${orderSide}`}</button></div>
+      </form>
+    </div>}
+
+    {modal === 'close-position' && selectedPosition && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !closeBusy && setModal('')}>
+      <form className="modal order-modal" onSubmit={submitClosePosition}>
+        <button className="modal-close" type="button" onClick={() => !closeBusy && setModal('')} aria-label="Закрыть"><X size={19} /></button>
+        <span className="modal-kicker">Подтверждение закрытия</span>
+        <h1 className={selectedPosition.side === 'BUY' ? 'buy-text' : 'sell-text'}>{selectedPosition.side} {selectedPosition.symbol}</h1>
+        <div className="order-details">
+          <div><span>Позиция / объём</span><strong>#{selectedPosition.ticket} · {Number(selectedPosition.volume).toFixed(2)} лота</strong></div>
+          <div><span>Цена открытия</span><strong>{price(selectedPosition.openPrice, /JPY/i.test(selectedPosition.symbol) ? 3 : 5)}</strong></div>
+          <div><span>Плавающий результат</span><strong className={Number(selectedPosition.netProfit) < 0 ? 'sell-text' : 'buy-text'}>{cash(selectedPosition.netProfit, account?.currency)}</strong></div>
+        </div>
+        {account?.accountType === 'real' && <label className="live-confirm">Реальный счёт: введите LIVE для подтверждения закрытия<input autoComplete="off" value={liveText} onChange={(event) => setLiveText(event.target.value)} placeholder="LIVE" /></label>}
+        <p className="order-warning"><ShieldCheck size={15} /> Закрытие отправит рыночную встречную заявку в MT5. Итог может быть как прибылью, так и убытком; цена зависит от исполнения брокера.</p>
+        {error && <p className="modal-error" role="alert">{error}</p>}
+        <div className="modal-actions"><button className="cancel-button" type="button" disabled={closeBusy} onClick={() => setModal('')}>Отмена</button><button className="confirm-sell" type="submit" disabled={closeBusy || (account?.accountType === 'real' && liveText.trim() !== 'LIVE')}>{closeBusy ? 'Закрытие…' : 'Подтвердить закрытие'}</button></div>
       </form>
     </div>}
 

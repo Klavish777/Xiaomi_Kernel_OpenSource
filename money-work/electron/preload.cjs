@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('moneyWork', {
   subscribeMt5Symbol: (symbol) => ipcRenderer.invoke('mt5:subscribe', symbol),
   getMt5Account: () => ipcRenderer.invoke('mt5:account'),
   getMt5History: (symbol, count = 2000) => ipcRenderer.invoke('mt5:history', symbol, count),
+  getMt5Positions: () => ipcRenderer.invoke('mt5:positions'),
+  closeMt5Position: (payload) => ipcRenderer.invoke('mt5:close-position', payload),
   placeMt5ManualOrder: (payload) => ipcRenderer.invoke('mt5:manual-order', payload),
   onMt5Event: (callback) => {
     const listener = (_event, payload) => callback(payload);

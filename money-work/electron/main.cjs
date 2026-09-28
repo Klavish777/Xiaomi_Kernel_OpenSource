@@ -208,6 +208,32 @@ ipcMain.handle('mt5:history', async (_event, symbol, count) => {
   return result.bars || [];
 });
 
+ipcMain.handle('mt5:positions', async () => {
+  const result = await bridgeRequest('positions');
+  return result.positions || [];
+});
+
+ipcMain.handle('mt5:close-position', async (_event, payload) => {
+  const ticket = Number(payload?.ticket);
+  if (!Number.isSafeInteger(ticket) || ticket <= 0) throw new Error('Choose a valid open position.');
+  const symbol = String(payload?.symbol || '').trim();
+  const side = String(payload?.side || '').toUpperCase();
+  const volume = Number(payload?.volume);
+  if (!symbol || !['BUY', 'SELL'].includes(side) || !Number.isFinite(volume) || volume <= 0) {
+    throw new Error('Refresh the open positions list and confirm the position again.');
+  }
+  if (payload?.confirmed !== true) throw new Error('Confirm the position details before closing it.');
+  const result = await bridgeRequest('close_position', {
+    ticket,
+    symbol,
+    side,
+    volume,
+    confirmed: true,
+    liveConfirmed: payload.liveConfirmed === true,
+  }, 20000);
+  return result.result;
+});
+
 ipcMain.handle('mt5:manual-order', async (_event, payload) => {
   if (!payload || !/^AUDCAD[A-Z0-9.+_-]*$/i.test(String(payload.symbol || ''))) {
     throw new Error('Manual Buy/Sell is currently limited to the broker AUDCAD symbol.');

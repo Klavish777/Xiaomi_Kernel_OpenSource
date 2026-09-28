@@ -59,8 +59,14 @@ test('renderer, Electron IPC and Python bridge expose no automatic strategy or p
   }
   assert.match(sources[0], /placeMt5ManualOrder/);
   assert.match(sources[0], /setInterval\(syncAccount, 100\)/);
-  assert.doesNotMatch(sources[1], /mt5:positions|mt5:deals/);
-  assert.doesNotMatch(sources[2], /getMt5Positions|getMt5Deals/);
+  assert.match(sources[1], /mt5:positions/);
+  assert.match(sources[1], /mt5:close-position/);
+  assert.doesNotMatch(sources[1], /mt5:deals/);
+  assert.match(sources[2], /getMt5Positions/);
+  assert.match(sources[2], /closeMt5Position/);
+  assert.doesNotMatch(sources[2], /getMt5Deals/);
+  assert.match(sources[0], /Открытые сделки/);
+  assert.match(sources[0], /submitClosePosition/);
   assert.match(sources[3], /"manual_order"/);
   assert.match(sources[3], /QUOTE_POLL_INTERVAL_SECONDS = 0\.05/);
   assert.match(sources[3], /MAX_SPREAD_PIPS/);

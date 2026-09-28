@@ -17,6 +17,7 @@ class FakeMT5(types.ModuleType):
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
     POSITION_TYPE_BUY = 0
+    POSITION_TYPE_SELL = 1
     ORDER_TIME_GTC = 0
     ORDER_FILLING_IOC = 1
     ORDER_FILLING_FOK = 0
@@ -45,7 +46,13 @@ class FakeMT5(types.ModuleType):
     def terminal_info(self): return self.terminal
     def symbol_info(self, _symbol): return self.symbol
     def symbol_info_tick(self, _symbol): return self.tick
-    def positions_get(self, symbol=None): return [row for row in self.positions if symbol is None or row.symbol == symbol]
+    def positions_get(self, symbol=None, ticket=None):
+        rows = self.positions
+        if symbol is not None:
+            rows = [row for row in rows if row.symbol == symbol]
+        if ticket is not None:
+            rows = [row for row in rows if row.ticket == ticket]
+        return rows
     def history_deals_get(self, _start, _end): return self.deals
     def copy_rates_from_pos(self, symbol, timeframe, start, count):
         self.rate_requests.append((symbol, timeframe, start, count))
@@ -93,6 +100,83 @@ class ManualBridgeTests(unittest.TestCase):
         self.assertEqual(FAKE_MT5.rate_requests[-1], ('AUDCAD+', FAKE_MT5.TIMEFRAME_M15, 0, 2))
         self.assertEqual(bars[0]['close'], 0.905)
         self.assertEqual(bars[0]['tickVolume'], 12)
+
+    def test_open_positions_are_reported_with_current_price_and_net_account_pnl(self):
+        FAKE_MT5.positions = [SimpleNamespace(
+            ticket=77, symbol='AUDCAD', type=FAKE_MT5.POSITION_TYPE_BUY, volume=0.01,
+            price_open=0.89900, sl=0.89700, tp=0.90200, profit=0.24, swap=-0.01,
+            commission=-0.02, time=1_700_000_000, magic=bridge.MANUAL_MAGIC,
+        )]
+
+        rows = bridge.get_open_positions()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['ticket'], 77)
+        self.assertEqual(rows[0]['side'], 'BUY')
+        self.assertEqual(rows[0]['currentPrice'], FAKE_MT5.tick.bid)
+        self.assertAlmostEqual(rows[0]['netProfit'], 0.21)
+        self.assertEqual(rows[0]['openedAt'], 1_700_000_000)
+
+    def test_confirmed_close_sends_opposite_market_deal_for_exact_full_position(self):
+        position = SimpleNamespace(
+            ticket=77, symbol='AUDCAD', type=FAKE_MT5.POSITION_TYPE_BUY, volume=0.03,
+            magic=42,
+        )
+        FAKE_MT5.positions = [position]
+
+        result = bridge.close_open_position({
+            'ticket': 77, 'symbol': 'AUDCAD', 'side': 'BUY', 'volume': 0.03, 'confirmed': True,
+        })
+
+        self.assertEqual(result['state'], 'position_closed')
+        self.assertEqual(result['ticket'], 77)
+        request = FAKE_MT5.requests[0]
+        self.assertEqual(request['position'], 77)
+        self.assertEqual(request['symbol'], 'AUDCAD')
+        self.assertEqual(request['volume'], 0.03)
+        self.assertEqual(request['type'], FAKE_MT5.ORDER_TYPE_SELL)
+        self.assertEqual(request['price'], FAKE_MT5.tick.bid)
+        self.assertEqual(request['magic'], 42)
+        self.assertIn('confirmed manual close', request['comment'])
+
+    def test_position_close_requires_confirmation_live_phrase_and_terminal_permission(self):
+        FAKE_MT5.positions = [SimpleNamespace(
+            ticket=77, symbol='AUDCAD', type=FAKE_MT5.POSITION_TYPE_SELL, volume=0.01, magic=0,
+        )]
+        command = {'ticket': 77, 'symbol': 'AUDCAD', 'side': 'SELL', 'volume': 0.01, 'confirmed': True}
+        with self.assertRaises(PermissionError):
+            bridge.close_open_position({**command, 'confirmed': False})
+        with self.assertRaises(ValueError):
+            bridge.close_open_position({**command, 'ticket': True})
+
+        FAKE_MT5.account.trade_mode = 2
+        with self.assertRaises(PermissionError):
+            bridge.close_open_position(command)
+        FAKE_MT5.terminal.tradeapi_disabled = True
+        with self.assertRaises(PermissionError):
+            bridge.close_open_position({**command, 'liveConfirmed': True})
+        FAKE_MT5.terminal.tradeapi_disabled = False
+        result = bridge.close_open_position({**command, 'liveConfirmed': True})
+        self.assertEqual(result['state'], 'position_closed')
+        self.assertEqual(FAKE_MT5.requests[0]['type'], FAKE_MT5.ORDER_TYPE_BUY)
+        self.assertEqual(FAKE_MT5.requests[0]['price'], FAKE_MT5.tick.ask)
+
+    def test_position_close_rechecks_confirmed_details_and_fails_when_changed(self):
+        FAKE_MT5.positions = [SimpleNamespace(
+            ticket=77, symbol='AUDCAD', type=FAKE_MT5.POSITION_TYPE_BUY, volume=0.02, magic=0,
+        )]
+        with self.assertRaisesRegex(RuntimeError, 'changed after confirmation'):
+            bridge.close_open_position({
+                'ticket': 77, 'symbol': 'AUDCAD', 'side': 'BUY', 'volume': 0.01, 'confirmed': True,
+            })
+        self.assertEqual(FAKE_MT5.requests, [])
+
+    def test_position_close_fails_if_ticket_is_no_longer_open(self):
+        with self.assertRaisesRegex(RuntimeError, 'no longer open'):
+            bridge.close_open_position({
+                'ticket': 404, 'symbol': 'AUDCAD', 'side': 'BUY', 'volume': 0.01, 'confirmed': True,
+            })
+        self.assertEqual(FAKE_MT5.requests, [])
 
     def test_manual_order_sends_market_order_with_risk_protection_and_manual_magic(self):
         result = bridge.place_manual_order(manual())
@@ -198,9 +282,11 @@ class ManualBridgeTests(unittest.TestCase):
             bridge.handle({'requestId': 3, 'action': 'deals'})
             self.assertEqual(response.call_count, 3)
             self.assertEqual(response.call_args_list[0].args, (1, False))
-            self.assertEqual(response.call_args_list[1].args, (2, False))
+            self.assertEqual(response.call_args_list[1].args, (2, True))
+            self.assertEqual(response.call_args_list[1].kwargs['positions'], [])
             self.assertEqual(response.call_args_list[2].args, (3, False))
-            self.assertTrue(all(call.kwargs['message'] == 'Unknown bridge command.' for call in response.call_args_list))
+            self.assertEqual(response.call_args_list[0].kwargs['message'], 'Unknown bridge command.')
+            self.assertEqual(response.call_args_list[2].kwargs['message'], 'Unknown bridge command.')
 
 
 if __name__ == '__main__':

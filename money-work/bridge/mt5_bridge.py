@@ -7,6 +7,7 @@ daily-loss and account-value limits. No strategy or autonomous entry logic is ex
 from __future__ import annotations
 
 import json
+import math
 import sys
 import threading
 import time
@@ -108,6 +109,41 @@ def get_account() -> dict:
         if not _connected:
             raise RuntimeError("Connect an MT5 account first.")
         return account_payload()
+
+
+def get_open_positions() -> list[dict]:
+    """Return the broker's current open positions for the account dashboard."""
+    with _mt5_lock:
+        if not _connected:
+            raise RuntimeError("Connect an MT5 account first.")
+        positions = mt5.positions_get()
+        if positions is None:
+            raise RuntimeError(f"Could not read open positions: {mt5.last_error()}")
+        rows = []
+        for position in positions:
+            is_buy = int(position.type) == int(mt5.POSITION_TYPE_BUY)
+            tick = mt5.symbol_info_tick(str(position.symbol))
+            current_price = None
+            if tick is not None:
+                value = float(getattr(tick, "bid" if is_buy else "ask", 0) or 0)
+                current_price = value if value > 0 else None
+            rows.append({
+                "ticket": int(position.ticket),
+                "symbol": str(position.symbol),
+                "side": "BUY" if is_buy else "SELL",
+                "volume": float(position.volume),
+                "openPrice": float(getattr(position, "price_open", 0) or 0),
+                "currentPrice": current_price,
+                "stopLoss": float(getattr(position, "sl", 0) or 0),
+                "takeProfit": float(getattr(position, "tp", 0) or 0),
+                "profit": float(getattr(position, "profit", 0) or 0),
+                "swap": float(getattr(position, "swap", 0) or 0),
+                "commission": float(getattr(position, "commission", 0) or 0),
+                "netProfit": sum(float(getattr(position, key, 0) or 0) for key in ("profit", "swap", "commission")),
+                "openedAt": int(getattr(position, "time", 0) or 0),
+                "magic": int(getattr(position, "magic", 0) or 0),
+            })
+        return rows
 
 
 def get_symbols(query: str) -> list[str]:
@@ -252,7 +288,7 @@ def _protected_market_order_request(symbol: str, side: str, volume: float, tick,
     }
 
 
-def _close_manual_position(position, tick) -> dict:
+def _close_manual_position(position, tick, comment="MoneyWork manual target exit") -> dict:
     is_buy = int(position.type) == int(mt5.POSITION_TYPE_BUY)
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -262,8 +298,8 @@ def _close_manual_position(position, tick) -> dict:
         "type": mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY,
         "price": float(tick.bid if is_buy else tick.ask),
         "deviation": 20,
-        "magic": MANUAL_MAGIC,
-        "comment": "MoneyWork manual target exit",
+        "magic": int(getattr(position, "magic", MANUAL_MAGIC) or 0),
+        "comment": comment,
         "type_time": mt5.ORDER_TIME_GTC,
     }
     return _send_market_deal(request)
@@ -296,6 +332,73 @@ def manual_target_poller() -> None:
         except Exception as exc:
             emit({"type": "warning", "message": f"Manual position target check failed: {exc}"})
         time.sleep(0.25)
+
+
+def close_open_position(command: dict) -> dict:
+    """Close one full broker position after an explicit, per-position confirmation."""
+    raw_ticket = command.get("ticket")
+    if isinstance(raw_ticket, bool):
+        raise ValueError("Choose a valid open position.")
+    try:
+        ticket = int(raw_ticket)
+    except (TypeError, ValueError):
+        raise ValueError("Choose a valid open position.") from None
+    if ticket <= 0:
+        raise ValueError("Choose a valid open position.")
+    expected_symbol = str(command.get("symbol", "")).strip()
+    expected_side = str(command.get("side", "")).upper()
+    try:
+        expected_volume = float(command.get("volume", 0))
+    except (TypeError, ValueError):
+        raise ValueError("Refresh the open positions list and confirm the position again.") from None
+    if (not expected_symbol or expected_side not in {"BUY", "SELL"}
+            or not math.isfinite(expected_volume) or expected_volume <= 0):
+        raise ValueError("Refresh the open positions list and confirm the position again.")
+    if command.get("confirmed") is not True:
+        raise PermissionError("Confirm the position details before closing it.")
+
+    with _mt5_lock:
+        if not _connected:
+            raise RuntimeError("Connect an MT5 account before closing a position.")
+        account = mt5.account_info()
+        terminal = mt5.terminal_info()
+        if account is None or terminal is None:
+            raise RuntimeError(f"MT5 account or terminal is unavailable: {mt5.last_error()}")
+        live_confirmed = command.get("liveConfirmed") is True
+        if not account_mode_allowed(int(account.trade_mode), live_confirmed):
+            raise PermissionError("Closing a Live position requires explicit per-order LIVE confirmation.")
+        if (not bool(getattr(account, "trade_allowed", False))
+                or not bool(getattr(terminal, "trade_allowed", False))
+                or bool(getattr(terminal, "tradeapi_disabled", False))):
+            raise PermissionError("MT5 or this account has disabled algorithmic trading. Enable it in MetaTrader and reconnect.")
+
+        positions = mt5.positions_get(ticket=ticket)
+        if positions is None:
+            raise RuntimeError(f"Could not read position {ticket}: {mt5.last_error()}")
+        if not positions:
+            raise RuntimeError(f"Position {ticket} is no longer open. Refresh the open positions list.")
+        if len(positions) != 1 or int(getattr(positions[0], "ticket", 0)) != ticket:
+            raise RuntimeError(f"MT5 did not return exactly the requested position {ticket}.")
+        position = positions[0]
+        actual_side = "BUY" if int(position.type) == int(mt5.POSITION_TYPE_BUY) else "SELL"
+        if (str(position.symbol) != expected_symbol or actual_side != expected_side
+                or abs(float(position.volume) - expected_volume) > 1e-8):
+            raise RuntimeError("Position details changed after confirmation. Refresh the open positions list and confirm again.")
+        tick = mt5.symbol_info_tick(str(position.symbol))
+        if (tick is None or float(getattr(tick, "bid", 0)) <= 0
+                or float(getattr(tick, "ask", 0)) <= 0
+                or not int(getattr(tick, "time", 0) or 0)):
+            raise RuntimeError(f"No valid MT5 closing quote is available for {position.symbol}.")
+
+        result = _close_manual_position(position, tick, "MoneyWork confirmed manual close")
+        return {
+            "state": "position_closed",
+            "ticket": ticket,
+            "symbol": str(position.symbol),
+            "side": "BUY" if int(position.type) == int(mt5.POSITION_TYPE_BUY) else "SELL",
+            "volume": float(position.volume),
+            "result": result,
+        }
 
 
 def place_manual_order(command: dict) -> dict:
@@ -408,6 +511,10 @@ def handle(command: dict) -> None:
             response(request_id, True, bars=get_history(str(command.get("symbol", "")), command.get("count", 2000)))
         elif action == "manual_order":
             response(request_id, True, result=place_manual_order(command))
+        elif action == "positions":
+            response(request_id, True, positions=get_open_positions())
+        elif action == "close_position":
+            response(request_id, True, result=close_open_position(command))
         elif action == "disconnect":
             disconnect()
             response(request_id, True, disconnected=True)
