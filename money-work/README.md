@@ -1,4 +1,4 @@
-# Money Work — v0.4.14
+# Money Work — v0.4.15
 
 Windows MT5 dashboard for AUD/CAD chart analysis, internet reference checks, configurable paper funds, and a manually armed automated MT5 strategy runner. On standard desktop resolutions, Overview and Agents use a compact fixed-height layout so the primary controls and information fit without page-level vertical scrolling; dense history/market lists remain locally contained. The internet source publishes daily public reference rates, not live execution prices. The chart and strategy signals use broker MT5 data.
 
@@ -26,7 +26,7 @@ Windows MT5 dashboard for AUD/CAD chart analysis, internet reference checks, con
 
 ### MT5 algorithmic trading permission
 
-If the bridge reports that algorithmic trading or the external Python API is disabled, Money Work stops that run instead of bypassing the terminal safety setting. In the same MT5 terminal, enable the Algo Trading toolbar control, then open **Tools → Options → Expert Advisors** and allow algorithmic trading and the external Python API. Reconnect the account in Money Work and explicitly start the agent again. Existing broker-side safeguards and live confirmation still apply.
+If the bridge reports that algorithmic trading or the external Python API is disabled, Money Work stops that run instead of bypassing the terminal safety setting. In the same MT5 terminal, enable the Algo Trading toolbar control, then open **Tools → Options → Expert Advisors**. Enable **Allow algorithmic trading** and uncheck **Disable automated trading via external Python API**. Confirm that MT5 is logged into the demo with a trading-enabled password (not an investor/read-only password), reconnect the account in Money Work, and explicitly start the agent again. Existing broker-side safeguards and live confirmation still apply.
 
 ## Windows setup
 

@@ -463,8 +463,8 @@ function App() {
         const algoTradingDisabled = /(?:algorithmic|algo) trading.*disabled|disabled.*(?:algorithmic|algo) trading|tradeapi_disabled/i.test(rawMessage);
         const message = algoTradingDisabled
           ? l(
-            'MT5 запретил внешнюю автоторговлю. В том же терминале откройте Сервис → Настройки → Советники, разрешите алгоритмическую торговлю и внешнее Python API, включите кнопку Algo Trading, затем переподключите счёт в Money Work и запустите агента снова.',
-            'MT5 has blocked algorithmic trading. In the same terminal, open Tools → Options → Expert Advisors, allow algorithmic trading and the external Python API, enable the Algo Trading toolbar button, then reconnect the account in Money Work and start the agent again.',
+            'MT5 запретил внешнюю автоторговлю. В том же терминале включите кнопку Algo Trading; откройте Сервис → Настройки → Советники, включите «Разрешить алгоритмическую торговлю» и снимите флажок «Отключить автоторговлю через внешний Python API». Проверьте, что в MT5 выполнен вход в DEMO с торговым, а не investor-паролем. Затем переподключите счёт в Money Work и запустите агента снова.',
+            'MT5 has blocked algorithmic trading. In the same terminal, enable the Algo Trading toolbar button; open Tools → Options → Expert Advisors, enable “Allow algorithmic trading” and uncheck “Disable automated trading via external Python API”. Confirm that MT5 is logged into the DEMO account with a trading-enabled password, not an investor/read-only password. Then reconnect the account in Money Work and start the agent again.',
           )
           : rawMessage;
         setBrokerAgentStatus({ state: algoTradingDisabled ? 'terminal_trading_disabled' : 'error', message });
