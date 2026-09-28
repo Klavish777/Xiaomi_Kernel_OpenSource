@@ -4,6 +4,7 @@ import { mergeHistoryBars, mergeMarketTick, mergeTickIntoBars } from './chartUti
 import './manual.css';
 import './positions.css';
 import './action-controls.css';
+import './account-summary.css';
 
 const SYMBOL_PREFIX = 'AUDCAD';
 const TIMEFRAME = '15M';
@@ -17,6 +18,12 @@ function cash(value, currency = '') {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return '—';
   return `${amount > 0 ? '+' : ''}${amount.toFixed(2)} ${currency}`.trim();
+}
+
+function accountMoney(value, currency = '') {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
+  return `${new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)} ${currency}`.trim();
 }
 
 function PriceChart({ bars, symbol }) {
@@ -96,7 +103,11 @@ export default function App() {
     try {
       const fresh = await window.moneyWork.getMt5Account();
       accountRef.current = fresh;
-      setAccount((current) => !current || current.accountType !== fresh.accountType || current.login !== fresh.login || current.server !== fresh.server ? fresh : current);
+      setAccount((current) => {
+        if (!current) return fresh;
+        const visibleAccountFields = ['accountType', 'login', 'server', 'currency', 'balance', 'equity', 'margin', 'tradeAllowed', 'terminalTradeAllowed', 'algorithmicTradingAllowed'];
+        return visibleAccountFields.some((key) => current[key] !== fresh[key]) ? fresh : current;
+      });
     } catch (reason) {
       setError(reason?.message || String(reason));
     } finally { syncLock.current = false; }
@@ -197,6 +208,7 @@ export default function App() {
   }, [account !== null, loadHistory, symbol, syncAccount, syncPositions]);
 
   const quoteFresh = Boolean(quote && Number(quote.bid) > 0 && Number(quote.ask) > 0 && now - Number(quote.receivedAt) <= QUOTE_FRESH_MS);
+  const income = useMemo(() => positions.reduce((total, position) => total + Number(position.netProfit || 0), 0), [positions]);
   const digits = /JPY/i.test(symbol) ? 3 : 5;
 
   function openSettings() {
@@ -340,9 +352,18 @@ export default function App() {
 
   return <main className="mw-app">
     <button className="settings-button" type="button" onClick={openSettings} aria-label="Настройки MT5" title="Настройки MT5"><Settings size={20} /></button>
-    <section className="chart-area" aria-label="График MT5">
-      <span className="chart-symbol">{symbol || 'AUDCAD'} · {TIMEFRAME}</span>
-      <PriceChart bars={bars} symbol={symbol} />
+    <section className="dashboard-top">
+      <section className="chart-area" aria-label="График MT5">
+        <span className="chart-symbol">{symbol || 'AUDCAD'} · {TIMEFRAME}</span>
+        <PriceChart bars={bars} symbol={symbol} />
+      </section>
+      <aside className="account-summary" aria-label="Баланс аккаунта">
+        <div className="summary-heading"><strong>АККАУНТ</strong><span className={account?.accountType === 'real' ? 'live-badge' : 'demo-badge'}>{account ? account.accountType.toUpperCase() : 'MT5'}</span></div>
+        <div className="summary-metric"><span>Всего на балансе</span><strong>{account ? accountMoney(account.balance, account.currency) : '—'}</strong></div>
+        <div className="summary-metric"><span>Заложено в работу</span><strong>{account ? accountMoney(account.margin, account.currency) : '—'}</strong><small>Маржа MT5</small></div>
+        <div className="summary-metric"><span>Доход</span><strong className={income < 0 ? 'income-negative' : 'income-positive'}>{account ? cash(income, account.currency) : '—'}</strong><small>Плавающий P/L открытых сделок</small></div>
+        {!account && <div className="summary-connect">Подключите MT5, чтобы увидеть показатели счёта.</div>}
+      </aside>
     </section>
     <section className="positions-panel" aria-label="Открытые сделки MT5">
       <div className="positions-heading">

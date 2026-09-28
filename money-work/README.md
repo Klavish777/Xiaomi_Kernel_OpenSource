@@ -1,6 +1,6 @@
 # Money Work
 
-Money Work has one compact trading screen: a live AUDCAD MT5 chart, an **open positions list with manual close controls**, and **manual BUY / SELL buttons**. The gear opens the MT5 connection settings. No analysis tools, strategies, agents, or in-app virtual balance are included. The chart uses the broker's AUDCAD symbol (including its suffix, if present) on a fixed 15-minute timeframe.
+Money Work has one compact trading screen: a live AUDCAD MT5 chart, a right-side account summary (balance, used margin and floating open-position P/L), an **open positions list with manual close controls**, and **manual BUY / SELL buttons**. The gear opens the MT5 connection settings. No analysis tools, strategies, agents, or in-app virtual balance are included. The chart uses the broker's AUDCAD symbol (including its suffix, if present) on a fixed 15-minute timeframe.
 
 ## MT5 connection and manual orders
 
