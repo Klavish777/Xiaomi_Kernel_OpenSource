@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, CandlestickChart, CircleX, LoaderCircle, RefreshCw,
 import { mergeHistoryBars, mergeMarketTick, mergeTickIntoBars } from './chartUtils.mjs';
 import './manual.css';
 import './positions.css';
+import './action-controls.css';
 
 const SYMBOL_PREFIX = 'AUDCAD';
 const TIMEFRAME = '15M';
@@ -62,16 +63,16 @@ export default function App() {
   const [positions, setPositions] = useState([]);
   const [positionsBusy, setPositionsBusy] = useState(false);
   const [positionsError, setPositionsError] = useState('');
-  const [selectedPosition, setSelectedPosition] = useState(null);
   const [modal, setModal] = useState('');
   const [settingsBusy, setSettingsBusy] = useState(false);
-  const [orderBusy, setOrderBusy] = useState(false);
-  const [closeBusy, setCloseBusy] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
   const [form, setForm] = useState({ login: '', password: '', server: '', remember: true });
-  const [orderSide, setOrderSide] = useState('');
   const [liveText, setLiveText] = useState('');
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [notice, setNotice] = useState('');
+  const actionBusyRef = useRef(false);
   const [now, setNow] = useState(Date.now());
   const symbolRef = useRef(symbol);
   const quoteRef = useRef(null);
@@ -237,66 +238,104 @@ export default function App() {
     setAccount(null); setQuote(null); setSymbol(''); setBars([]); setPositions([]);
   }
 
-  function beginOrder(side) {
-    setError(''); setNotice('');
-    if (!window.moneyWork) { openSettings(); setError('Подключение к MT5 доступно в установленном приложении Money Work.'); return; }
-    if (!account || !symbol) { openSettings(); return; }
-    if (!quoteFresh) { setError('Свежая котировка MT5 недоступна. Ордер не отправлен.'); setModal('message'); return; }
-    setOrderSide(side);
-    setLiveText('');
-    setModal('order');
-  }
-
-  async function submitOrder(event) {
-    event.preventDefault();
-    if (!account || !orderSide || orderBusy) return;
-    if (!quoteFresh) { setError('Свежая котировка MT5 недоступна. Ордер не отправлен.'); setModal('message'); return; }
-    if (account.accountType === 'real' && liveText.trim() !== 'LIVE') return;
-    setOrderBusy(true);
-    setError('');
+  async function sendManualOrder(side, liveConfirmed = false) {
+    if (!account || !symbol || actionBusyRef.current) return false;
+    if (!quoteFresh) {
+      setActionError('Свежая котировка MT5 недоступна. Ордер не отправлен.');
+      return false;
+    }
+    if (account.accountType === 'real' && !liveConfirmed) return false;
+    actionBusyRef.current = true;
+    setActionBusy(true);
+    setActionError('');
     try {
       const result = await window.moneyWork.placeMt5ManualOrder({
-        symbol, side: orderSide, confirmed: true,
-        liveConfirmed: account.accountType === 'real' && liveText.trim() === 'LIVE',
+        symbol, side, confirmed: true, liveConfirmed,
       });
       setNotice(`Ордер отправлен: ${result.side} ${result.volume} ${result.symbol} · ${price(result.entry, digits)}`);
-      setModal('');
       window.setTimeout(() => setNotice(''), 4000);
       await Promise.all([syncAccount(), syncPositions()]);
-    } catch (reason) { setError(reason?.message || String(reason)); }
-    finally { setOrderBusy(false); }
+      return true;
+    } catch (reason) {
+      setActionError(reason?.message || String(reason));
+      return false;
+    } finally {
+      actionBusyRef.current = false;
+      setActionBusy(false);
+    }
+  }
+
+  function beginOrder(side) {
+    setActionError('');
+    setNotice('');
+    if (!window.moneyWork) { openSettings(); setActionError('Подключение к MT5 доступно в установленном приложении Money Work.'); return; }
+    if (!account || !symbol) { openSettings(); return; }
+    if (account.accountType === 'real') {
+      setLiveText('');
+      setPendingAction({ type: 'open', side });
+      return;
+    }
+    setPendingAction(null);
+    void sendManualOrder(side);
+  }
+
+  async function sendPositionClose(position, liveConfirmed = false) {
+    if (!account || !position || actionBusyRef.current) return false;
+    if (account.accountType === 'real' && !liveConfirmed) return false;
+    actionBusyRef.current = true;
+    setActionBusy(true);
+    setActionError('');
+    try {
+      const result = await window.moneyWork.closeMt5Position({
+        ticket: position.ticket,
+        symbol: position.symbol,
+        side: position.side,
+        volume: position.volume,
+        confirmed: true,
+        liveConfirmed,
+      });
+      setNotice(`Позиция закрыта: ${result.side} ${result.volume} ${result.symbol}`);
+      window.setTimeout(() => setNotice(''), 5000);
+      await Promise.all([syncAccount(), syncPositions()]);
+      return true;
+    } catch (reason) {
+      setActionError(reason?.message || String(reason));
+      return false;
+    } finally {
+      actionBusyRef.current = false;
+      setActionBusy(false);
+    }
   }
 
   function beginClosePosition(position) {
-    setError('');
+    setActionError('');
     setNotice('');
-    setSelectedPosition(position);
-    setLiveText('');
-    setModal('close-position');
+    if (!account) { openSettings(); return; }
+    if (account.accountType === 'real') {
+      setLiveText('');
+      setPendingAction({ type: 'close', position });
+      return;
+    }
+    setPendingAction(null);
+    void sendPositionClose(position);
   }
 
-  async function submitClosePosition(event) {
+  async function submitLiveAction(event) {
     event.preventDefault();
-    if (!account || !selectedPosition || closeBusy) return;
-    if (account.accountType === 'real' && liveText.trim() !== 'LIVE') return;
-    setCloseBusy(true);
-    setError('');
-    try {
-      const result = await window.moneyWork.closeMt5Position({
-        ticket: selectedPosition.ticket,
-        symbol: selectedPosition.symbol,
-        side: selectedPosition.side,
-        volume: selectedPosition.volume,
-        confirmed: true,
-        liveConfirmed: account.accountType === 'real' && liveText.trim() === 'LIVE',
-      });
-      setNotice(`Позиция закрыта: ${result.side} ${result.volume} ${result.symbol}`);
-      setModal('');
-      setSelectedPosition(null);
-      window.setTimeout(() => setNotice(''), 5000);
-      await Promise.all([syncAccount(), syncPositions()]);
-    } catch (reason) { setError(reason?.message || String(reason)); }
-    finally { setCloseBusy(false); }
+    if (!pendingAction || actionBusyRef.current || liveText.trim() !== 'LIVE') return;
+    const succeeded = pendingAction.type === 'open'
+      ? await sendManualOrder(pendingAction.side, true)
+      : await sendPositionClose(pendingAction.position, true);
+    if (succeeded) {
+      setPendingAction(null);
+      setLiveText('');
+    }
+  }
+
+  function cancelLiveAction() {
+    if (actionBusy) return;
+    setPendingAction(null);
+    setLiveText('');
   }
 
   return <main className="mw-app">
@@ -320,13 +359,24 @@ export default function App() {
           <span className={`position-side ${position.side === 'BUY' ? 'buy-text' : 'sell-text'}`}>{position.side}</span>
           <span>{Number(position.volume).toFixed(2)}</span>
           <span className={Number(position.netProfit) < 0 ? 'sell-text' : 'buy-text'}>{cash(position.netProfit, account?.currency)}</span>
-          <button className="close-position-button" type="button" onClick={() => beginClosePosition(position)} aria-label={`Закрыть ${position.side} ${position.symbol}, позиция ${position.ticket}`}><CircleX size={15} /> Закрыть</button>
+          <button className="close-position-button" type="button" disabled={actionBusy || Boolean(pendingAction)} onClick={() => beginClosePosition(position)} aria-label={`Закрыть ${position.side} ${position.symbol}, позиция ${position.ticket}`}><CircleX size={15} /> Закрыть</button>
         </div>)}
       </div>}
     </section>
+    {pendingAction && <form className="live-action-panel" onSubmit={submitLiveAction}>
+      <div className="live-action-copy">
+        <strong>{pendingAction.type === 'open' ? `${pendingAction.side} ${symbol}` : `Закрыть ${pendingAction.position.side} ${pendingAction.position.symbol}`}</strong>
+        <span>{pendingAction.type === 'open' ? '0,01 лота · требуется подтверждение для Live' : `Позиция #${pendingAction.position.ticket} · ${Number(pendingAction.position.volume).toFixed(2)} лота · результат ${cash(pendingAction.position.netProfit, account?.currency)}`}</span>
+      </div>
+      <label className="live-action-input">Введите LIVE<input autoComplete="off" value={liveText} onChange={(event) => setLiveText(event.target.value)} placeholder="LIVE" /></label>
+      <button className="live-action-submit" type="submit" disabled={actionBusy || liveText.trim() !== 'LIVE'}>{actionBusy ? 'Отправка…' : 'Выполнить'}</button>
+      <button className="live-action-cancel" type="button" disabled={actionBusy} onClick={cancelLiveAction}>Отмена</button>
+    </form>}
+    {actionError && <div className="toast-error" role="alert">{actionError}</div>}
+    {error && modal !== 'settings' && <div className="toast-error" role="alert">{error}</div>}
     <section className="trade-buttons" aria-label="Ручная торговля">
-      <button className="buy-button" type="button" onClick={() => beginOrder('BUY')}><ArrowUp size={21} /> BUY</button>
-      <button className="sell-button" type="button" onClick={() => beginOrder('SELL')}><ArrowDown size={21} /> SELL</button>
+      <button className="buy-button" type="button" disabled={actionBusy || Boolean(pendingAction)} onClick={() => beginOrder('BUY')}><ArrowUp size={21} /> BUY</button>
+      <button className="sell-button" type="button" disabled={actionBusy || Boolean(pendingAction)} onClick={() => beginOrder('SELL')}><ArrowDown size={21} /> SELL</button>
     </section>
     {notice && <div className="toast-success" role="status">{notice}</div>}
 
@@ -349,42 +399,5 @@ export default function App() {
       </section>
     </div>}
 
-    {modal === 'order' && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !orderBusy && setModal('')}>
-      <form className="modal order-modal" onSubmit={submitOrder}>
-        <button className="modal-close" type="button" onClick={() => !orderBusy && setModal('')} aria-label="Закрыть"><X size={19} /></button>
-        <span className="modal-kicker">Подтверждение ордера</span>
-        <h1 className={orderSide === 'BUY' ? 'buy-text' : 'sell-text'}>{orderSide} {symbol}</h1>
-        <div className="order-details">
-          <div><span>Объём</span><strong>0,01 лота</strong></div>
-          <div><span>Рыночная котировка</span><strong>{price(orderSide === 'BUY' ? quote?.ask : quote?.bid, digits)}</strong></div>
-          <div><span>Стоп-лосс / тейк-профит</span><strong>20 / 30 пипсов</strong></div>
-          <div><span>Цель</span><strong>0,30 валюты счёта на 0,01 лота</strong></div>
-          <div><span>Счёт</span><strong>{account?.accountType === 'real' ? 'REAL' : 'DEMO'}</strong></div>
-        </div>
-        {account?.accountType === 'real' && <label className="live-confirm">Реальный счёт: введите LIVE<input autoComplete="off" value={liveText} onChange={(event) => setLiveText(event.target.value)} placeholder="LIVE" /></label>}
-        <p className="order-warning"><ShieldCheck size={15} /> Ордер отправляется в MT5. Исполнение, проскальзывание и возможный убыток зависят от брокера.</p>
-        {error && <p className="modal-error" role="alert">{error}</p>}
-        <div className="modal-actions"><button className="cancel-button" type="button" disabled={orderBusy} onClick={() => setModal('')}>Отмена</button><button className={orderSide === 'BUY' ? 'confirm-buy' : 'confirm-sell'} type="submit" disabled={orderBusy || (account?.accountType === 'real' && liveText.trim() !== 'LIVE')}>{orderBusy ? 'Отправка…' : `Подтвердить ${orderSide}`}</button></div>
-      </form>
-    </div>}
-
-    {modal === 'close-position' && selectedPosition && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !closeBusy && setModal('')}>
-      <form className="modal order-modal" onSubmit={submitClosePosition}>
-        <button className="modal-close" type="button" onClick={() => !closeBusy && setModal('')} aria-label="Закрыть"><X size={19} /></button>
-        <span className="modal-kicker">Подтверждение закрытия</span>
-        <h1 className={selectedPosition.side === 'BUY' ? 'buy-text' : 'sell-text'}>{selectedPosition.side} {selectedPosition.symbol}</h1>
-        <div className="order-details">
-          <div><span>Позиция / объём</span><strong>#{selectedPosition.ticket} · {Number(selectedPosition.volume).toFixed(2)} лота</strong></div>
-          <div><span>Цена открытия</span><strong>{price(selectedPosition.openPrice, /JPY/i.test(selectedPosition.symbol) ? 3 : 5)}</strong></div>
-          <div><span>Плавающий результат</span><strong className={Number(selectedPosition.netProfit) < 0 ? 'sell-text' : 'buy-text'}>{cash(selectedPosition.netProfit, account?.currency)}</strong></div>
-        </div>
-        {account?.accountType === 'real' && <label className="live-confirm">Реальный счёт: введите LIVE для подтверждения закрытия<input autoComplete="off" value={liveText} onChange={(event) => setLiveText(event.target.value)} placeholder="LIVE" /></label>}
-        <p className="order-warning"><ShieldCheck size={15} /> Закрытие отправит рыночную встречную заявку в MT5. Итог может быть как прибылью, так и убытком; цена зависит от исполнения брокера.</p>
-        {error && <p className="modal-error" role="alert">{error}</p>}
-        <div className="modal-actions"><button className="cancel-button" type="button" disabled={closeBusy} onClick={() => setModal('')}>Отмена</button><button className="confirm-sell" type="submit" disabled={closeBusy || (account?.accountType === 'real' && liveText.trim() !== 'LIVE')}>{closeBusy ? 'Закрытие…' : 'Подтвердить закрытие'}</button></div>
-      </form>
-    </div>}
-
-    {modal === 'message' && <div className="modal-backdrop" role="presentation" onMouseDown={() => setModal('')}><section className="modal message-modal"><button className="modal-close" type="button" onClick={() => setModal('')} aria-label="Закрыть"><X size={19} /></button><p className="modal-error">{error}</p><button className="connect-button" type="button" onClick={() => setModal('')}>Закрыть</button></section></div>}
   </main>;
 }
