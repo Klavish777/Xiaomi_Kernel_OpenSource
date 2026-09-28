@@ -1,6 +1,7 @@
 import importlib
 import os
 import sys
+import time
 import types
 import unittest
 from datetime import datetime
@@ -73,6 +74,8 @@ def reset_mocks():
     FAKE_MT5.deals = []
     FAKE_MT5.requests = []
     bridge._connected = True
+    bridge._quote_observations.clear()
+    bridge._record_quote_observation('AUDCAD', FAKE_MT5.tick)
 
 
 def manual(side='BUY', **overrides):
@@ -139,14 +142,26 @@ class ManualBridgeTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             bridge.place_manual_order(manual())
         FAKE_MT5.terminal.tradeapi_disabled = False
-        FAKE_MT5.tick.time = int(datetime.now().timestamp()) - 60
-        with self.assertRaises(RuntimeError):
+        signature = bridge._tick_signature(FAKE_MT5.tick)
+        bridge._quote_observations['AUDCAD'] = (signature, time.monotonic() - 61)
+        with self.assertRaisesRegex(RuntimeError, 'over 30 seconds'):
             bridge.place_manual_order(manual())
-        FAKE_MT5.tick.time = int(datetime.now().timestamp())
         FAKE_MT5.tick.ask = 0.90060
         with self.assertRaises(PermissionError):
             bridge.place_manual_order(manual())
         self.assertEqual(FAKE_MT5.requests, [])
+
+    def test_future_broker_tick_clock_does_not_block_manual_order(self):
+        future_timestamp = int(datetime.now().timestamp()) + 300
+        FAKE_MT5.tick.time = future_timestamp
+        FAKE_MT5.tick.time_msc = future_timestamp * 1000
+        bridge._record_quote_observation('AUDCAD', FAKE_MT5.tick)
+
+        result = bridge.place_manual_order(manual('SELL'))
+
+        self.assertEqual(result['result']['retcode'], FAKE_MT5.TRADE_RETCODE_DONE)
+        self.assertEqual(len(FAKE_MT5.requests), 1)
+        self.assertEqual(FAKE_MT5.requests[0]['type'], FAKE_MT5.ORDER_TYPE_SELL)
 
     def test_manual_cash_target_monitor_only_closes_manual_positions(self):
         position = SimpleNamespace(type=FAKE_MT5.POSITION_TYPE_BUY, symbol='AUDCAD', ticket=88, volume=0.01)

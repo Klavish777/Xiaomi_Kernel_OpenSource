@@ -34,7 +34,9 @@ _out_lock = threading.Lock()
 _mt5_lock = threading.RLock()
 _state_lock = threading.RLock()
 _active_symbols: set[str] = set()
+_quote_observations: dict[str, tuple[tuple, float]] = {}
 QUOTE_POLL_INTERVAL_SECONDS = 0.05  # Read the latest terminal tick up to 20 Hz; this does not create broker ticks.
+MAX_QUOTE_RECEIPT_AGE_SECONDS = 30.0
 _connected = False
 _running = True
 MANUAL_MAGIC = 26092708
@@ -95,6 +97,9 @@ def connect(payload: dict) -> dict:
         if not mt5.initialize(**kwargs):
             raise RuntimeError(f"Could not connect to MT5: {mt5.last_error()}. Check the server, account, password, and terminal path.")
         _connected = True
+        with _state_lock:
+            _active_symbols.clear()
+            _quote_observations.clear()
         return account_payload()
 
 
@@ -117,6 +122,43 @@ def get_symbols(query: str) -> list[str]:
         return matches[:500]
 
 
+def _tick_signature(tick) -> tuple:
+    """Identify a distinct terminal quote without comparing broker time to the PC clock."""
+    return (
+        int(getattr(tick, "time_msc", 0) or 0),
+        int(getattr(tick, "time", 0) or 0),
+        float(getattr(tick, "bid", 0) or 0),
+        float(getattr(tick, "ask", 0) or 0),
+        float(getattr(tick, "last", 0) or 0),
+        int(getattr(tick, "volume", 0) or 0),
+        float(getattr(tick, "volume_real", 0) or 0),
+        int(getattr(tick, "flags", 0) or 0),
+    )
+
+
+def _record_quote_observation(symbol: str, tick) -> None:
+    signature = _tick_signature(tick)
+    with _state_lock:
+        previous = _quote_observations.get(symbol)
+        if previous is None or previous[0] != signature:
+            _quote_observations[symbol] = (signature, time.monotonic())
+
+
+def _quote_is_recent(symbol: str, tick) -> bool:
+    """Check receipt age monotonically; broker/server wall clocks may differ from Windows."""
+    signature = _tick_signature(tick)
+    now = time.monotonic()
+    with _state_lock:
+        previous = _quote_observations.get(symbol)
+        if previous is None:
+            return False
+        if previous[0] != signature:
+            # The direct MT5 read produced a new quote since the background poll.
+            _quote_observations[symbol] = (signature, now)
+            return True
+        return now - previous[1] <= MAX_QUOTE_RECEIPT_AGE_SECONDS
+
+
 def subscribe(symbol: str) -> dict:
     name = symbol.strip()
     if not name:
@@ -135,6 +177,7 @@ def subscribe(symbol: str) -> dict:
         with _state_lock:
             _active_symbols.clear()
             _active_symbols.add(name)
+        _record_quote_observation(name, tick)
         return {"symbol": name, "bid": float(tick.bid), "ask": float(tick.ask), "time": int(tick.time)}
 
 
@@ -241,11 +284,10 @@ def manual_target_poller() -> None:
                             target = profit_target_for_volume(float(position.volume))
                             if pnl < target:
                                 continue
-                            tick = mt5.symbol_info_tick(str(position.symbol))
-                            tick_time = int(getattr(tick, "time", 0)) if tick is not None else 0
-                            tick_age = time.time() - tick_time if tick_time else float("inf")
+                            symbol = str(position.symbol)
+                            tick = mt5.symbol_info_tick(symbol)
                             if (tick is None or float(getattr(tick, "bid", 0)) <= 0
-                                    or float(getattr(tick, "ask", 0)) <= 0 or tick_age > 30 or tick_age < -120):
+                                    or float(getattr(tick, "ask", 0)) <= 0 or not _quote_is_recent(symbol, tick)):
                                 continue
                             result = _close_manual_position(position, tick)
                             emit({"type": "manual_target_exit", "ticket": int(position.ticket),
@@ -284,12 +326,10 @@ def place_manual_order(command: dict) -> dict:
         tick = mt5.symbol_info_tick(symbol)
         if info is None or tick is None or float(tick.bid) <= 0 or float(tick.ask) <= 0:
             raise RuntimeError(f"No valid MT5 market data is available for {symbol}.")
-        tick_time = int(getattr(tick, "time", 0))
-        tick_age = now.timestamp() - tick_time if tick_time else float("inf")
-        if not tick_time or tick_age > 30:
-            raise RuntimeError("The latest AUDCAD tick is stale; manual orders are blocked until fresh market data arrives.")
-        if tick_age < -120:
-            raise RuntimeError("The MT5 tick clock is more than two minutes ahead of this computer; sync the clocks before ordering.")
+        if not int(getattr(tick, "time", 0)):
+            raise RuntimeError("The latest AUDCAD quote has no MT5 timestamp; manual orders are blocked.")
+        if not _quote_is_recent(symbol, tick):
+            raise RuntimeError("The latest AUDCAD quote has not changed in the terminal for over 30 seconds; wait for a fresh quote before ordering.")
 
         if int(getattr(info, "trade_mode", 0)) != int(getattr(mt5, "SYMBOL_TRADE_MODE_FULL", 4)):
             raise PermissionError("AUDCAD trading is disabled or one-direction-only at this broker.")
@@ -328,6 +368,7 @@ def disconnect() -> None:
     global _connected
     with _state_lock:
         _active_symbols.clear()
+        _quote_observations.clear()
     with _mt5_lock:
         if _connected:
             mt5.shutdown()
@@ -343,6 +384,7 @@ def quote_poller() -> None:
                     with _mt5_lock:
                         tick = mt5.symbol_info_tick(symbol)
                     if tick is not None:
+                        _record_quote_observation(symbol, tick)
                         emit({"type": "tick", "symbol": symbol, "bid": float(tick.bid), "ask": float(tick.ask),
                               "last": float(tick.last), "time": int(tick.time), "timeMsc": int(tick.time_msc)})
                 except Exception as exc:

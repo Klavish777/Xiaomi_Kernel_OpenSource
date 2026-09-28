@@ -1,6 +1,6 @@
 {
   "name": "money-work",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0-rc.3",
   "private": true,
   "description": "Money Work live MT5 chart with explicitly confirmed, risk-capped manual trading",
   "main": "electron/main.cjs",
