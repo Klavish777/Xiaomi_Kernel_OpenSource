@@ -102,6 +102,11 @@ class BridgeAgentTests(unittest.TestCase):
         bridge._connected = True
         bridge._learning_cache.update({'login': None, 'loadedAt': 0.0, 'trades': []})
 
+    def test_equal_start_end_schedule_allows_the_selected_full_day(self):
+        result = bridge.evaluate_agent(demo_command(schedule={'start': '00:00', 'end': '00:00', 'days': list(range(7))}))
+        self.assertEqual(result['state'], 'position_opened')
+        self.assertEqual(FAKE_MT5.requests[0]['volume'], 0.01)
+
     def test_demo_order_contains_hard_volume_cap_and_stop_loss_take_profit(self):
         result = bridge.evaluate_agent(demo_command())
         request = FAKE_MT5.requests[0]
@@ -180,6 +185,9 @@ class BridgeAgentTests(unittest.TestCase):
     def test_stale_quote_and_non_audcad_symbol_are_blocked(self):
         FAKE_MT5.tick.time = int(datetime.now().timestamp()) - 120
         with self.assertRaises(RuntimeError):
+            bridge.evaluate_agent(demo_command())
+        FAKE_MT5.tick.time = int(datetime.now().timestamp()) + 180
+        with self.assertRaisesRegex(RuntimeError, 'clock is more than two minutes ahead'):
             bridge.evaluate_agent(demo_command())
         FAKE_MT5.tick.time = int(datetime.now().timestamp())
         with self.assertRaises(ValueError):

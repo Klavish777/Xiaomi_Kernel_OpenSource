@@ -52,3 +52,5 @@
 .update-check-message { display:flex; align-items:center; gap:8px; margin-bottom:8px; padding:7px 10px; border:1px solid #344052; border-radius:7px; color:#b5c5d9; font-size:9px; }
 .update-check-message button { margin-left:auto; }
 .quote-freshness-warning { display:block; padding:6px 7px; border:1px solid #76523c; border-radius:5px; background:#261d18; color:#edc29b; font-size:7px; line-height:1.45; }
+
+.schedule-note { display:block; margin-top:3px; color:#8592a4; font-size:7px; line-height:1.3; }

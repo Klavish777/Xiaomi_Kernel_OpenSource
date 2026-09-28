@@ -112,9 +112,9 @@ def is_inside_schedule(now: datetime, start: str, end: str, weekdays: list[int])
     start_value = start_hour * 60 + start_minute
     end_value = end_hour * 60 + end_minute
     current_value = now.hour * 60 + now.minute
-    if start_value == end_value:
-        return False
     selected = set(int(day) for day in weekdays if 0 <= int(day) <= 6)
+    if start_value == end_value:
+        return now.weekday() in {(day - 1) % 7 for day in selected}
     if start_value < end_value:
         return now.weekday() in {(day - 1) % 7 for day in selected} and start_value <= current_value < end_value
     if current_value >= start_value:

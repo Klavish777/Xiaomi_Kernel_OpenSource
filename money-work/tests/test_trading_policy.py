@@ -71,7 +71,9 @@ class TradingPolicyTests(unittest.TestCase):
         self.assertTrue(is_inside_schedule(monday, '09:00', '17:00', [1, 2, 3, 4, 5]))
         self.assertFalse(is_inside_schedule(datetime(2026, 9, 28, 17, 0), '09:00', '17:00', [1]))
         self.assertTrue(is_inside_schedule(tuesday, '22:00', '02:00', [1]))
-        self.assertFalse(is_inside_schedule(monday, '09:00', '09:00', [1]))
+        self.assertTrue(is_inside_schedule(monday, '09:00', '09:00', [1]))
+        self.assertTrue(is_inside_schedule(datetime(2026, 9, 28, 0, 0), '00:00', '00:00', [1]))
+        self.assertFalse(is_inside_schedule(monday, '00:00', '00:00', [2]))
 
     def test_two_losses_cause_one_hour_cooldown_but_win_resets_streak(self):
         now = datetime(2026, 9, 28, 12, 0)

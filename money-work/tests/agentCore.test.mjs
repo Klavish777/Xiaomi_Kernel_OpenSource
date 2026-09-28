@@ -1,13 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, compareAppVersions, computeRuleSignal, findNewerAppRelease, isInsideSchedule, normalizeBankOfCanadaReference, summarizePaperHistory, movingAverageValues, sliceChartHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
+import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, compareAppVersions, computeRuleSignal, findNewerAppRelease, isInsideSchedule, marketTimestampMs, mergeMarketTick, normalizeMarketTimestamp, normalizeBankOfCanadaReference, summarizePaperHistory, movingAverageValues, sliceChartHistory, validateReferencePayload, validateReferenceRecord } from '../src/agentCore.mjs';
 
 test('schedule follows selected local weekdays and inclusive start/exclusive end', () => {
   const mondayMorning = new Date(2026, 8, 28, 9, 0);
   assert.equal(isInsideSchedule(mondayMorning, '09:00', '17:00', [1, 2, 3, 4, 5]), true);
   assert.equal(isInsideSchedule(new Date(2026, 8, 28, 17, 0), '09:00', '17:00', [1, 2, 3, 4, 5]), false);
   assert.equal(isInsideSchedule(mondayMorning, '09:00', '17:00', [2, 3, 4, 5]), false);
-  assert.equal(isInsideSchedule(mondayMorning, '09:00', '09:00', [1]), false);
+  assert.equal(isInsideSchedule(mondayMorning, '09:00', '09:00', [1]), true);
+  assert.equal(isInsideSchedule(mondayMorning, '00:00', '00:00', [1]), true);
+  assert.equal(isInsideSchedule(mondayMorning, '00:00', '00:00', [2]), false);
+});
+
+test('MT5 quote timestamps normalize seconds, milliseconds, microseconds, and nanoseconds', () => {
+  const expected = Date.UTC(2026, 8, 28, 12, 0, 0);
+  assert.equal(normalizeMarketTimestamp(expected / 1000), expected);
+  assert.equal(normalizeMarketTimestamp(expected), expected);
+  assert.equal(normalizeMarketTimestamp(expected * 1000), expected);
+  assert.equal(normalizeMarketTimestamp(expected * 1_000_000), expected);
+  assert.equal(marketTimestampMs({ time: expected / 1000 }), expected);
+  assert.equal(marketTimestampMs({ timeMsc: expected }), expected);
+  assert.equal(normalizeMarketTimestamp(0), null);
+});
+
+test('repeated MT5 poller ticks do not refresh receipt age; changed ticks do', () => {
+  const first = mergeMarketTick(null, { symbol: 'AUDCAD', bid: 0.9, ask: 0.9001, timeMsc: 1_790_586_000_000 }, 1000);
+  const repeated = mergeMarketTick(first, { symbol: 'AUDCAD', bid: 0.9, ask: 0.9001, timeMsc: 1_790_586_000_000 }, 5000);
+  assert.equal(repeated.receivedAt, 1000);
+  const next = mergeMarketTick(repeated, { symbol: 'AUDCAD', bid: 0.90001, ask: 0.90011, timeMsc: 1_790_586_001_000 }, 6000);
+  assert.equal(next.receivedAt, 6000);
+  const futureClock = mergeMarketTick(null, { symbol: 'AUDCAD', bid: 0.9, ask: 0.9001, timeMsc: 1_800_000_000_000 }, 1_790_000_000_000);
+  const correctedClock = mergeMarketTick(futureClock, { symbol: 'AUDCAD', bid: 0.9001, ask: 0.9002, timeMsc: 1_790_000_001_000 }, 1_790_000_001_000);
+  assert.equal(correctedClock.bid, 0.9001);
+  assert.equal(correctedClock.receivedAt, 1_790_000_001_000);
 });
 
 test('overnight schedule attributes after-midnight hours to prior selected day', () => {
@@ -72,6 +97,19 @@ test('three-analyst consensus requires directional data, fresh quote, validated 
   assert.equal(staleQuote.analysts.market.ageSeconds, 31);
   const noQuote = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, referenceData, brokerStatus: {}, now });
   assert.equal(noQuote.reason, 'quote_unavailable');
+  const slightlyFutureQuote = buildAnalystConsensus({
+    analysis: { signal: 'WATCH BUY', rsi: 55 },
+    quote: { bid: 0.9, ask: 0.90002, timeMsc: now.getTime() + 5000, receivedAt: now.getTime() },
+    referenceData,
+    brokerStatus: {},
+    now,
+  });
+  assert.equal(slightlyFutureQuote.analysts.market.ready, true);
+  assert.equal(slightlyFutureQuote.entryAllowed, true);
+  const excessiveClockSkew = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote: { bid: 0.9, ask: 0.90002, timeMsc: now.getTime() + 121000, receivedAt: now.getTime() }, referenceData, brokerStatus: {}, now });
+  assert.equal(excessiveClockSkew.reason, 'quote_clock_skew');
+  const stoppedFutureQuote = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 55 }, quote: { bid: 0.9, ask: 0.90002, timeMsc: now.getTime() + 5000, receivedAt: now.getTime() - 31000 }, referenceData, brokerStatus: {}, now });
+  assert.equal(stoppedFutureQuote.reason, 'quote_timestamp_invalid');
   const weakLearning = buildAnalystConsensus({ analysis: { signal: 'WATCH BUY', rsi: 65 }, quote, referenceData, brokerStatus: { closedTrades: 5, winRate: 0.2 }, now });
   assert.equal(weakLearning.entryAllowed, false);
   assert.equal(weakLearning.reason, 'adaptive_filter');

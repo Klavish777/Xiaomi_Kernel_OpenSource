@@ -7,7 +7,7 @@ import {
   Brain, Sparkles, TrendingUp, Wallet, X, Zap, Maximize2, Languages, RefreshCw,
   Globe, Bot, Play, Pause, CircleCheck, Settings2,
 } from 'lucide-react';
-import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, findNewerAppRelease, movingAverageValues, normalizeBankOfCanadaReference, sliceChartHistory, summarizePaperHistory, validateReferencePayload } from './agentCore.mjs';
+import { MAX_AGENT_EQUITY, adjustVirtualBalance, advancePaperAgent, buildAnalystConsensus, findNewerAppRelease, marketTimestampMs, mergeMarketTick, movingAverageValues, normalizeBankOfCanadaReference, sliceChartHistory, summarizePaperHistory, validateReferencePayload } from './agentCore.mjs';
 import realisticEarth from './assets/realistic-earth.png';
 import cartoonBrain from './assets/cartoon-brain.png';
 import cartoonMiner from './assets/cartoon-miner.png';
@@ -244,7 +244,7 @@ function App() {
       }
     }).catch((error) => setMt5Error(error.message));
     return window.moneyWork.onMt5Event((event) => {
-      if (event.type === 'tick') setQuotes((current) => ({ ...current, [event.symbol]: event }));
+      if (event.type === 'tick') setQuotes((current) => ({ ...current, [event.symbol]: mergeMarketTick(current[event.symbol], event) }));
       if (event.type === 'error' || event.type === 'warning' || event.type === 'fatal') setMt5Error(event.message || 'MT5 connector error');
     });
   }, []);
@@ -301,7 +301,7 @@ function App() {
       setSelectedSymbol(match);
       setOlderBarsOffset(0);
       const quote = await window.moneyWork.subscribeMt5Symbol(match);
-      setQuotes((current) => ({ ...current, [match]: quote }));
+      setQuotes((current) => ({ ...current, [match]: mergeMarketTick(current[match], quote) }));
     } catch (error) {
       setMt5Error(error.message);
     }
@@ -501,7 +501,7 @@ function App() {
   useEffect(() => {
     if (!paperAgent.enabled || !liveQuote || !analysis) return;
     const price = (Number(liveQuote.bid) + Number(liveQuote.ask)) / 2;
-    const quoteTime = Number(liveQuote.timeMsc || Number(liveQuote.time || 0) * 1000);
+    const quoteTime = marketTimestampMs(liveQuote);
     if (!quoteTime || quoteTime - paperLastQuoteTime.current < 2000) return;
     paperLastQuoteTime.current = quoteTime;
     if (executionMode === 'mt5') {
@@ -876,6 +876,7 @@ function App() {
                   {cashAdjustmentError && <div className="connection-error compact-error">{cashAdjustmentError}</div>}
                 </> : <div className="live-account-summary"><span>{l('Баланс MT5', 'MT5 balance')} <b>{mt5Account ? `${mt5Account.currency} ${Number(mt5Account.balance).toFixed(2)}` : '—'}</b></span><span>{l('Снятие/пополнение реального счёта выполняется только у брокера.', 'Real account deposits/withdrawals are handled by the broker.')}</span></div>}
                 <div className="schedule-inline"><label>{l('С', 'From')}<input type="time" value={paperAgent.start} onChange={(event) => setPaperAgent((current) => ({ ...current, start: event.target.value }))} /></label><label>{l('До', 'To')}<input type="time" value={paperAgent.end} onChange={(event) => setPaperAgent((current) => ({ ...current, end: event.target.value }))} /></label><div className="weekday-picker compact-weekdays"><span>{l('Дни ·', 'Days ·')} {Intl.DateTimeFormat().resolvedOptions().timeZone}</span><div>{(language === 'ru' ? ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] : ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']).map((label, day) => <button key={day} type="button" className={paperAgent.days.includes(day) ? 'selected' : ''} aria-pressed={paperAgent.days.includes(day)} onClick={() => setPaperAgent((current) => ({ ...current, days: current.days.includes(day) ? current.days.filter((item) => item !== day) : [...current.days, day].sort() }))}>{label}</button>)}</div></div></div>
+                {paperAgent.start === paperAgent.end && <small className="schedule-note">{l('Одинаковое время означает весь выбранный день.', 'Matching start/end times mean all day on selected weekdays.')}</small>}
                 <div className="paper-performance-grid compact-performance"><div><small>{executionMode === 'paper' ? l('P&L paper', 'Paper P&L') : l('P&L агента сегодня', 'Agent P&L today')}</small><strong className={Number(brokerAgentStatus?.dailyPnl ?? paperAgent.realizedPnl) >= 0 ? 'positive-text' : 'negative-text'}>{executionMode === 'paper' ? `${Number(paperAgent.realizedPnl || 0).toFixed(2)} CAD` : brokerAgentStatus?.dailyPnl !== undefined ? `${Number(brokerAgentStatus.dailyPnl).toFixed(2)} ${mt5Account?.currency || ''}` : '—'}</strong></div><div><small>{l('Сигнал', 'Signal')}</small><strong>{analysis?.signal || l('Нет данных', 'No data')}</strong></div><div><small>{executionMode === 'paper' ? l('Виртуальная позиция', 'Paper position') : l('Состояние агента', 'Agent status')}</small><strong>{executionMode === 'paper' ? (paperAgent.goalReached ? l('Лимит достигнут · остановлен', 'Cap reached · stopped') : paperAgent.position ? `${paperAgent.position.side} AUDCAD` : l('Нет', 'None')) : brokerGoalReached ? l('Лимит 80 млн достигнут', '80M cap reached') : (brokerAgentStatus?.state || l('Ожидание', 'Waiting'))}</strong></div></div>
                 <div className="analyst-consensus" aria-live="polite">
                   <div className="analyst-consensus-heading"><strong>{l('СОГЛАСОВАННОЕ РЕШЕНИЕ', 'ANALYST CONSENSUS')}</strong><span className={analystConsensus.entryAllowed ? 'consensus-ready' : 'consensus-wait'}>{analystConsensus.entryAllowed ? `${l('ВХОД', 'ENTRY')} · ${analystConsensus.decision}` : `${l('ОЖИДАНИЕ', 'WAIT')} · ${analystConsensus.reason.replaceAll('_', ' ')}`}</span></div>
@@ -884,7 +885,7 @@ function App() {
                     <span><b>{l('Интернет · дневной ориентир', 'Internet · daily reference')}</b><small>{analystConsensus.analysts.internet.ready ? `${Number(analystConsensus.analysts.internet.rate).toFixed(5)} · ${analystConsensus.analysts.internet.sourceDate}` : l(`Проверка нужна: ${analystConsensus.analysts.internet.reason}`, `Check needed: ${analystConsensus.analysts.internet.reason.replaceAll('_', ' ')}`)}</small></span>
                     <span><b>{l('Адаптация', 'Adaptive/history')}</b><small>{analystConsensus.analysts.learning.state === 'warming_up' ? l('Сбор закрытых сделок', 'Collecting closed trades') : analystConsensus.analysts.learning.state === 'adaptive_filter' ? l('Фильтр входа ужесточён', 'Entry filter tightened') : analystConsensus.analysts.learning.state === 'learning_cooldown' ? l('Пауза после серии убытков', 'Loss-streak cooldown') : `${analystConsensus.analysts.learning.closedTrades} ${l('закрытых сделок', 'closed trades')}`}</small></span>
                   </div>
-                  {!analystConsensus.analysts.market.ready && <small className="quote-freshness-warning">{analystConsensus.analysts.market.reason === 'quote_stale' ? l(`Последний MT5 тик ${analystConsensus.analysts.market.ageSeconds} с назад. Новые входы заблокированы до свежей котировки; проверьте подключение терминала, Market Watch и часы торгов.`, `Last MT5 tick was ${analystConsensus.analysts.market.ageSeconds}s ago. New entries stay blocked until a fresh broker quote arrives; check terminal connectivity, Market Watch, and market hours.`) : analystConsensus.analysts.market.reason === 'quote_timestamp_invalid' ? l('Время котировки MT5 некорректно; новые входы остаются заблокированы.', 'MT5 quote timestamp is invalid; new entries remain blocked.') : l('Нет доступной котировки MT5; новые входы остаются заблокированы до получения свежего тика.', 'No MT5 quote is available; new entries remain blocked until a fresh tick arrives.')}</small>}
+                  {!analystConsensus.analysts.market.ready && <small className="quote-freshness-warning">{analystConsensus.analysts.market.reason === 'quote_stale' ? l(`Последний MT5 тик ${analystConsensus.analysts.market.ageSeconds} с назад. Новые входы заблокированы до свежей котировки; проверьте подключение терминала, Market Watch и часы торгов.`, `Last MT5 tick was ${analystConsensus.analysts.market.ageSeconds}s ago. New entries stay blocked until a fresh broker quote arrives; check terminal connectivity, Market Watch, and market hours.`) : analystConsensus.analysts.market.reason === 'quote_clock_skew' ? l(`Часы MT5 опережают компьютер на ${analystConsensus.analysts.market.clockSkewSeconds} с. Синхронизируйте время Windows и терминала; новые входы заблокированы.`, `MT5 clock is ${analystConsensus.analysts.market.clockSkewSeconds}s ahead of this computer. Sync Windows and terminal clocks; new entries remain blocked.`) : analystConsensus.analysts.market.reason === 'quote_timestamp_invalid' ? l('Время котировки MT5 некорректно или устарело; новые входы остаются заблокированы.', 'MT5 quote timestamp is invalid or old; new entries remain blocked.') : l('Нет доступной котировки MT5; новые входы остаются заблокированы до получения свежего тика.', 'No MT5 quote is available; new entries remain blocked until a fresh tick arrives.')}</small>}
                   <small className="consensus-footnote">{l('Новая сделка требует всех трёх проверок. Дневной курс — только проверка источника, не live-котировка и не прогноз направления.', 'A new entry requires all three checks. The daily rate validates the source only; it is neither a live quote nor a directional forecast.')}</small>
                 </div>
                 {executionMode === 'mt5' && brokerAgentStatus && <div className={`broker-agent-message ${['error', 'daily_loss_stop', 'terminal_trading_disabled'].includes(brokerAgentStatus.state) ? 'error-state' : ''}`}><span>{brokerAgentStatus.message || brokerAgentStatus.learning || l('Последний цикл', 'Last cycle') + ': ' + brokerAgentStatus.state}</span><small>{brokerAgentStatus.winRate === null || brokerAgentStatus.winRate === undefined ? l('Обучение: ожидаются закрытые сделки', 'Learning: waiting for closed trades') : `${l('Доля прибыльных закрытых сделок', 'Closed-trade win rate')}: ${(brokerAgentStatus.winRate * 100).toFixed(0)}% · ${brokerAgentStatus.closedTrades} ${l('сделок', 'trades')} · ${brokerAgentStatus.consecutiveLosses || 0} ${l('убытков подряд', 'losses in a row')}`}</small></div>}

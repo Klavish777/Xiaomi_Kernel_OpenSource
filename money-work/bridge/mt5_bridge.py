@@ -268,16 +268,16 @@ def evaluate_agent(command: dict) -> dict:
         now = datetime.now()
         settings = command.get("schedule") if isinstance(command.get("schedule"), dict) else {}
         scheduled = is_inside_schedule(now, str(settings.get("start", "09:00")), str(settings.get("end", "17:00")), settings.get("days", []))
-        if settings.get("start") == settings.get("end"):
-            scheduled = False
-
         info = mt5.symbol_info(symbol)
         tick = mt5.symbol_info_tick(symbol)
         if info is None or tick is None or float(tick.bid) <= 0 or float(tick.ask) <= 0:
             raise RuntimeError(f"No valid MT5 market data is available for {symbol}.")
         tick_time = int(getattr(tick, "time", 0))
-        if not tick_time or now.timestamp() - tick_time > 30:
+        tick_age = now.timestamp() - tick_time if tick_time else float("inf")
+        if not tick_time or tick_age > 30:
             raise RuntimeError("The latest AUDCAD tick is stale; new orders are blocked until fresh market data arrives.")
+        if tick_age < -120:
+            raise RuntimeError("The MT5 tick clock is more than two minutes ahead of this computer; sync the Windows and terminal clocks before enabling new entries.")
 
         all_positions = mt5.positions_get(symbol=symbol)
         if all_positions is None:

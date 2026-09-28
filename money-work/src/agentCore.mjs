@@ -15,13 +15,48 @@ export function isInsideSchedule(date, start, end, days) {
   const endMinute = parseTime(end);
   if (startMinute === null || endMinute === null || selectedDays.size === 0) return false;
 
-  if (startMinute === endMinute) return false;
+  if (startMinute === endMinute) return selectedDays.has(date.getDay());
   if (startMinute < endMinute) {
     return selectedDays.has(date.getDay()) && minuteOfDay >= startMinute && minuteOfDay < endMinute;
   }
   if (minuteOfDay >= startMinute) return selectedDays.has(date.getDay());
   if (minuteOfDay < endMinute) return selectedDays.has((date.getDay() + 6) % 7);
   return false;
+}
+
+export function normalizeMarketTimestamp(value) {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+  if (timestamp >= 1e17) return timestamp / 1e6; // nanoseconds since epoch -> milliseconds
+  if (timestamp >= 1e14) return timestamp / 1e3; // microseconds since epoch -> milliseconds
+  if (timestamp >= 1e11) return timestamp; // milliseconds since epoch
+  if (timestamp >= 1e8) return timestamp * 1e3; // seconds since epoch -> milliseconds
+  return null;
+}
+
+export function marketTimestampMs(quote) {
+  return normalizeMarketTimestamp(quote?.timeMsc) ?? normalizeMarketTimestamp(quote?.time);
+}
+
+export function mergeMarketTick(previous, incoming, receivedAt = Date.now()) {
+  const incomingTime = marketTimestampMs(incoming);
+  const previousTime = marketTimestampMs(previous);
+  const sameTick = Boolean(previous)
+    && incomingTime === previousTime
+    && Number(incoming?.bid) === Number(previous?.bid)
+    && Number(incoming?.ask) === Number(previous?.ask);
+  if (previous && incomingTime && previousTime && incomingTime < previousTime) {
+    const incomingAge = receivedAt - incomingTime;
+    const previousSkew = previousTime - receivedAt;
+    const recoveringClockCorrection = previousSkew > 120000 && incomingAge >= -120000 && incomingAge <= 30000;
+    if (!recoveringClockCorrection) return previous;
+  }
+  return {
+    ...incoming,
+    receivedAt: sameTick && Number.isFinite(Number(previous?.receivedAt))
+      ? Number(previous.receivedAt)
+      : receivedAt,
+  };
 }
 
 export function normalizeBankOfCanadaReference(payload) {
@@ -219,11 +254,24 @@ export function buildAnalystConsensus({ analysis, quote, referenceData, brokerSt
   const signal = ['WATCH BUY', 'WATCH SELL', 'WAIT'].includes(analysis?.signal) ? analysis.signal : 'WAIT';
   const rsi = Number(analysis?.rsi);
   const technicalReady = Number.isFinite(rsi) && rsi >= 0 && rsi <= 100 && signal !== 'WAIT';
-  const quoteTime = Number(quote?.timeMsc || Number(quote?.time || 0) * 1000);
-  const quoteAge = quoteTime ? now.getTime() - quoteTime : Infinity;
+  const quoteTime = marketTimestampMs(quote);
+  const quoteAge = quoteTime === null ? Infinity : now.getTime() - quoteTime;
+  const receivedAt = Number(quote?.receivedAt);
+  const receiptAge = Number.isFinite(receivedAt) ? now.getTime() - receivedAt : Infinity;
   const quotePricesValid = Number(quote?.bid) > 0 && Number(quote?.ask) >= Number(quote?.bid);
-  const quoteReady = quotePricesValid && quoteAge >= 0 && quoteAge <= 30000;
-  const quoteReason = !quotePricesValid || !quoteTime ? 'quote_unavailable' : quoteAge < 0 ? 'quote_timestamp_invalid' : quoteAge > 30000 ? 'quote_stale' : 'quote_unavailable';
+  const futureClockSkew = quoteAge < -120000;
+  const sourceFresh = quoteAge >= 0 && quoteAge <= 30000;
+  const receivedFreshWithSmallSkew = quoteAge < 0 && !futureClockSkew && receiptAge >= 0 && receiptAge <= 30000;
+  const quoteReady = quotePricesValid && quoteTime !== null && !futureClockSkew && (sourceFresh || receivedFreshWithSmallSkew);
+  const quoteReason = !quotePricesValid || quoteTime === null
+    ? 'quote_unavailable'
+    : futureClockSkew
+      ? 'quote_clock_skew'
+      : quoteAge < 0 && !receivedFreshWithSmallSkew
+        ? 'quote_timestamp_invalid'
+        : quoteAge > 30000
+          ? 'quote_stale'
+          : 'quote_unavailable';
   const reference = validateReferenceRecord(referenceData, now);
   const state = brokerStatus?.state;
   const hardBlocked = ['error', 'daily_loss_stop', 'learning_cooldown', 'adaptive_filter', 'analyst_paused'].includes(state);
@@ -238,7 +286,7 @@ export function buildAnalystConsensus({ analysis, quote, referenceData, brokerSt
     decision: entryAllowed ? signal : 'WAIT',
     reason,
     analysts: {
-      market: { ready: quoteReady, ageSeconds: Number.isFinite(quoteAge) && quoteAge >= 0 ? Math.floor(quoteAge / 1000) : null, reason: quoteReady ? 'verified' : quoteReason },
+      market: { ready: quoteReady, ageSeconds: Number.isFinite(quoteAge) && quoteAge >= 0 ? Math.floor(quoteAge / 1000) : Number.isFinite(receiptAge) && receiptAge >= 0 ? Math.floor(receiptAge / 1000) : null, clockSkewSeconds: Number.isFinite(quoteAge) && quoteAge < 0 ? Math.ceil(-quoteAge / 1000) : 0, reason: quoteReady ? 'verified' : quoteReason },
       technical: { ready: technicalReady, signal, rsi: Number.isFinite(rsi) ? rsi : null },
       internet: { ready: reference.valid, rate: reference.rate, sourceDate: reference.sourceDate, reason: reference.reason },
       learning: { ready: !hardBlocked && learnedEntryAllowed, state: hardBlocked ? state : learnerTightened && !learnedEntryAllowed ? 'adaptive_filter' : closedTrades ? 'learning' : 'warming_up', closedTrades, winRate: Number.isFinite(winRate) ? winRate : null },

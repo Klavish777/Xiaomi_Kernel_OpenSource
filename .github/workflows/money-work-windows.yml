@@ -7,14 +7,28 @@ on:
     paths:
       - 'money-work/**'
       - '.github/workflows/money-work-windows.yml'
+  pull_request:
+    branches:
+      - README
+    paths:
+      - 'money-work/**'
+      - '.github/workflows/money-work-windows.yml'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the installer after the full Windows test/build job succeeds
+        type: boolean
+        required: false
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows-installer:
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -119,25 +133,44 @@ jobs:
             throw "Installer payload is missing release/win-unpacked/resources/mt5-bridge.exe"
           }
 
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Money-Work-Windows-Installer-${{ github.run_id }}
+          path: money-work/release/Money-Work-Setup-${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    needs: windows-installer
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tested branch
+        uses: actions/checkout@v4
+
+      - name: Download the installer from the successful test/build job
+        uses: actions/download-artifact@v4
+        with:
+          name: Money-Work-Windows-Installer-${{ github.run_id }}
+          path: money-work/release
+
       - name: Publish versioned download
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $tag = "money-work-v$env:APP_VERSION"
-          $installer = "money-work/release/Money-Work-Setup-$env:APP_VERSION.exe"
+          $version = (Get-Content money-work/VERSION -Raw).Trim()
+          $package = (Get-Content money-work/package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne $package) { throw "VERSION ($version) differs from package.json ($package)" }
+          $tag = "money-work-v$version"
+          $installer = "money-work/release/Money-Work-Setup-$version.exe"
+          if (!(Test-Path $installer)) { throw "Tested installer artifact is missing: $installer" }
           $existing = gh release list --json tagName --jq '.[].tagName' | Where-Object { $_ -eq $tag }
           if ($existing) {
             gh release upload $tag $installer --clobber
           } else {
-            gh release create $tag $installer --title "Money Work v$env:APP_VERSION" --notes "Money Work v$env:APP_VERSION adds a validated Bank of Canada daily AUD/CAD fallback when Frankfurter is unavailable, quote-freshness diagnostics that block entries on stale or missing MT5 ticks, and an in-app notification linking to newer Money Work releases. It retains the MT5 trading-permission checks, Bybit MT5 CFD server presets, interactive AUD/CAD strategy catalog, draggable 2,000-candle MT5 chart, and three-agent dashboard. The brain and miner mascots toggle their respective agents, each agent has a settings control, and reduced-motion preferences are respected. Paper stops at 80,000,000 CAD virtual equity; MT5 latches off when balance or equity reaches 80,000,000 units of its account currency (no conversion) and closes only bot-owned positions. The runner retains the 0.01-lot cap, mandatory SL/TP, one-position rule, 1% account-wide daily-loss stop, live confirmation, and adaptive safeguards; cash targets do not guarantee profit or override safety exits. Windows CI runs analyst/reference and mocked broker/risk tests, connector runtime imports, checks either public daily-reference endpoint, and verifies the installer before publishing. The release workflow publishes only after all tests and packaging checks succeed." --prerelease
+            gh release create $tag $installer --title "Money Work v$version" --notes "Money Work v$version normalizes MT5 quote timestamp units and tolerates only a small server-clock offset while the tick is newly received; stale or significantly future-dated quotes remain blocked. Equal schedule start/end times now explicitly mean all day on selected weekdays, fixing the 00:00–00:00 schedule being incorrectly reported outside_schedule. The app also has a validated Bank of Canada daily AUD/CAD fallback, clearer quote diagnostics, and update notices. Existing trading permissions, explicit real-account confirmation, 0.01-lot cap, account-currency profit target, mandatory SL/TP, daily loss stop, and account-equity cap remain unchanged. Tests and the Windows installer build run before manual publishing is enabled." --prerelease
           }
-
-      - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Money-Work-Windows-Installer
-          path: money-work/release/Money-Work-Setup-${{ steps.version.outputs.version }}.exe
-          if-no-files-found: error
-          retention-days: 14
