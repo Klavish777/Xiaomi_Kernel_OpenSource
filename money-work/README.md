@@ -1,12 +1,20 @@
 # Money Work
 
-Money Work has one compact trading screen: a live AUDCAD MT5 chart, a right-side account summary (balance, used margin and floating open-position P/L), an **open positions list with manual close controls**, **manual BUY / SELL buttons**, and an optional local AI helper for visual interface settings. The gear opens the MT5 connection settings. No automatic strategies or in-app virtual balance are included. The chart uses the broker's AUDCAD symbol (including its suffix, if present) on a fixed 15-minute timeframe.
+Money Work has a live AUDCAD MT5 chart, a right-side account summary (balance, used margin and floating open-position P/L), an **open positions list with manual close controls**, manual BUY / SELL buttons, and an optional local AI helper. AI-assisted autonomous trading is opt-in, Demo-only, and uses the same protected MT5 bridge; it is off by default. No in-app virtual balance is included. The chart uses the broker's AUDCAD symbol (including its suffix, if present) on a fixed 15-minute timeframe.
 
 ## Optional local AI helper
 
 The helper runs through **Ollama on the same computer** using the `qwen2.5:3b` model. Ollama itself is a separate installation and is not bundled with Money Work. Install it from [ollama.com/download/windows](https://ollama.com/download/windows), start Ollama, then use **Проверить снова** in the assistant panel. Money Work can then download the model from the panel and show its progress; the first download requires an internet connection and several gigabytes of free storage. After download, commands run through Ollama's local `127.0.0.1:11434` endpoint. Assistant commands and account details are not sent to a cloud AI service by Money Work. If Ollama or the model is unavailable, the MT5 chart and manual trading functions remain separate.
 
-For safety, natural-language commands can currently change only presentation settings: compact layout, the account-summary panel, and the open-positions panel. They cannot place or close orders, edit trading risk limits or permissions, alter MT5 settings, or rewrite application code. Changes to the program itself require a reviewed code patch and a new build; an installed EXE cannot safely rewrite its own code on the fly. The existing Demo/Live safeguards and manual trade controls are unchanged.
+Natural-language commands can change presentation settings such as compact layout, the account-summary panel, and the open-positions panel. Changes to application code still require a reviewed code patch and a new build; the installed EXE cannot rewrite itself.
+
+## Optional AI-assisted Demo trading
+
+- Autonomous operation is **off by default** and starts only after the user clicks **Start on Demo**. It is restricted to the broker's AUDCAD symbol on M15. The local model may choose BUY, SELL, CLOSE, or WAIT once per new M15 bar; the AI has no access to account credentials.
+- The app sends the order through the existing MT5 bridge. The bridge continues to enforce terminal/account Algo Trading permissions, fresh quote, spread cap, one AUDCAD position at a time, volume ≤0.01 lot, SL/TP, daily-loss stop, account cap and broker rules. Model confidence is not a guarantee; losses remain possible. Stop prevents further decisions; a broker request already sent cannot be recalled.
+- **Live accounts are never traded autonomously.** On Live, the user operates the existing manual controls and enters `LIVE` before every open or close.
+- Market context combines MT5 candles/quote with public Google News RSS headlines for AUDCAD and the Australian/Canadian central banks. Headlines are unverified context, may be delayed or irrelevant, and are not price data. Only a fixed public query is sent online; prompts, account balance and credentials are sent only to the local Ollama process.
+- App actions and assistant decisions are kept in a local JSONL journal in the app's user-data directory. While Demo autonomy is armed, one local journal review is run hourly with a maximum five-minute inference timeout; the resulting notes are reused as context. This is **not model-weight training or a guarantee of improved decisions**. A manual “Review journal” control is also available.
 
 ## MT5 connection and manual orders
 

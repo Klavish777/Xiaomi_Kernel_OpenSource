@@ -1,8 +1,8 @@
 {
   "name": "money-work",
-  "version": "1.0.0-rc.9",
+  "version": "1.0.0-rc.10",
   "private": true,
-  "description": "Money Work live MT5 chart with explicitly confirmed, risk-capped manual trading",
+  "description": "Money Work live MT5 chart with risk-capped manual trading and opt-in Demo-only local AI automation",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

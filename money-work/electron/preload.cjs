@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('moneyWork', {
   getAssistantStatus: () => ipcRenderer.invoke('assistant:status'),
   openAssistantDownload: () => ipcRenderer.invoke('assistant:open-download'),
   setupAssistantModel: () => ipcRenderer.invoke('assistant:setup-model'),
+  getAssistantAutoStatus: () => ipcRenderer.invoke('assistant:auto-status'),
+  armAssistantAuto: () => ipcRenderer.invoke('assistant:arm-auto'),
+  disarmAssistantAuto: () => ipcRenderer.invoke('assistant:disarm-auto'),
+  runAssistantCycle: (payload) => ipcRenderer.invoke('assistant:run-cycle', payload),
+  reviewAssistantNow: () => ipcRenderer.invoke('assistant:review-now'),
+  getAssistantJournal: () => ipcRenderer.invoke('assistant:journal'),
   onAssistantSetupProgress: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('assistant:setup-progress', listener);

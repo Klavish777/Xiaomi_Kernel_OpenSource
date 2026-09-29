@@ -71,7 +71,7 @@ test('renderer, Electron IPC and Python bridge expose no automatic strategy or p
   assert.match(sources[0], /Плавающий P\/L открытых сделок/);
   assert.match(sources[0], /account\.margin/);
   assert.match(sources[0], /askLocalAssistant/);
-  assert.match(sources[0], /только вид интерфейса/);
+  assert.match(sources[0], /Авто-ордера запускаются отдельной кнопкой только на Demo/);
   assert.match(sources[1], /const ollamaApi = 'http:\/\/127\.0\.0\.1:11434\/api'/);
   assert.match(sources[1], /const assistantModel = 'qwen2\.5:3b'/);
   assert.match(sources[1], /for \(const key of \['compact', 'showSummary', 'showPositions'\]\)/);
@@ -84,6 +84,19 @@ test('renderer, Electron IPC and Python bridge expose no automatic strategy or p
   assert.match(sources[0], /onAssistantSetupProgress/);
   const assistantHandler = sources[1].split("ipcMain.handle('assistant:command'")[1]?.split("ipcMain.handle('mt5:manual-order'")[0] || '';
   assert.doesNotMatch(assistantHandler, /bridgeRequest|mt5:manual-order|mt5:close-position/);
+  assert.match(sources[1], /ipcMain\.handle\('assistant:arm-auto'/);
+  assert.match(sources[2], /armAssistantAuto: \(\) => ipcRenderer\.invoke\('assistant:arm-auto'/);
+  assert.match(sources[2], /runAssistantCycle: \(payload\) => ipcRenderer\.invoke\('assistant:run-cycle'/);
+  assert.match(sources[2], /disarmAssistantAuto: \(\) => ipcRenderer\.invoke\('assistant:disarm-auto'/);
+  assert.match(sources[1], /account\.accountType !== 'demo'/);
+  assert.match(sources[1], /bridgeRequest\('manual_order', \{ symbol, side: decision\.action, confirmed: true, liveConfirmed: false \}/);
+  assert.match(sources[1], /bridgeRequest\('close_position'/);
+  assert.match(sources[1], /fetch\(`https:\/\/news\.google\.com\/rss\/search/);
+  assert.match(sources[1], /AbortSignal\.timeout\(300000\)/);
+  assert.match(sources[1], /assistant-journal\.jsonl/);
+  assert.match(sources[0], /Разрешить и запустить на Demo/);
+  assert.match(sources[0], /Остановить/);
+  assert.match(sources[0], /веса модели не переобучаются/);
   assert.match(sources[0], /void sendManualOrder\(side\)/);
   assert.match(sources[0], /void sendPositionClose\(position\)/);
   assert.match(sources[0], /Введите LIVE/);

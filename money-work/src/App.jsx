@@ -103,7 +103,13 @@ export default function App() {
   const [assistantSetupBusy, setAssistantSetupBusy] = useState(false);
   const [assistantSetupMessage, setAssistantSetupMessage] = useState('');
   const [assistantSetupProgress, setAssistantSetupProgress] = useState(null);
+  const [assistantAutoActive, setAssistantAutoActive] = useState(false);
+  const [assistantAutoBusy, setAssistantAutoBusy] = useState(false);
+  const [assistantAutoMessage, setAssistantAutoMessage] = useState('');
+  const [assistantTrainingMessage, setAssistantTrainingMessage] = useState('');
   const actionBusyRef = useRef(false);
+  const assistantCycleLock = useRef(false);
+  const assistantDataRef = useRef({ symbol, account, bars, positions });
   const [now, setNow] = useState(Date.now());
   const symbolRef = useRef(symbol);
   const quoteRef = useRef(null);
@@ -134,13 +140,30 @@ export default function App() {
       } catch (_) {
         if (active) setAssistantRuntime({ checking: false, running: false, modelReady: false });
       }
+      try {
+        const autoStatus = await window.moneyWork.getAssistantAutoStatus?.();
+        if (active) setAssistantAutoActive(autoStatus?.armed === true);
+      } catch (_) { if (active) setAssistantAutoActive(false); }
     };
     const unsubscribe = window.moneyWork.onAssistantSetupProgress?.((progress) => {
-      if (active) setAssistantSetupProgress(progress);
+      if (!active) return;
+      if (progress?.kind === 'learning') setAssistantTrainingMessage('Идёт ежечасный разбор журнала…');
+      else if (progress?.kind === 'learning-done') setAssistantTrainingMessage(progress.status || 'Разбор завершён.');
+      else setAssistantSetupProgress(progress);
     });
     refreshStatus();
     return () => { active = false; unsubscribe?.(); };
   }, []);
+
+  useEffect(() => {
+    assistantDataRef.current = { symbol, account, bars, positions };
+  }, [symbol, account, bars, positions]);
+
+  useEffect(() => {
+    if (!assistantAutoActive) return undefined;
+    const cycle = window.setInterval(() => { void runAssistantAutoCycle(); }, 60000);
+    return () => window.clearInterval(cycle);
+  }, [assistantAutoActive]);
 
   const syncAccount = useCallback(async () => {
     if (!window.moneyWork || syncLock.current) return;
@@ -439,6 +462,80 @@ export default function App() {
     }
   }
 
+  async function runAssistantAutoCycle() {
+    if (assistantCycleLock.current) return;
+    const current = assistantDataRef.current;
+    if (!current.account || !current.symbol || !window.moneyWork?.runAssistantCycle) return;
+    assistantCycleLock.current = true;
+    try {
+      const result = await window.moneyWork.runAssistantCycle({ symbol: current.symbol });
+      if (!result?.ok) {
+        if (result?.error) setAssistantAutoMessage(result.error);
+        if (result?.error?.includes('stopped') || result?.error?.includes('остановлен')) setAssistantAutoActive(false);
+        return;
+      }
+      if (!result.skipped) {
+        const execution = result.execution?.state;
+        const actionText = { WAIT: 'Ожидание', BUY: 'Решение BUY', SELL: 'Решение SELL', CLOSE: 'Решение закрыть' }[result.action] || result.action;
+        const executionText = execution === 'manual_order_placed' ? ' · Demo-ордер отправлен' : execution === 'position_closed' ? ' · Demo-позиция закрыта' : execution === 'blocked' ? ' · ордер остановлен защитной проверкой' : '';
+        setAssistantAutoMessage(`${actionText} · уверенность ${result.confidence}%${executionText}. ${result.reason || ''}`);
+        if (result.execution?.reason === 'account_or_terminal_permissions_changed') setAssistantAutoActive(false);
+        await Promise.all([syncAccount(), syncPositions()]);
+      }
+    } catch (reason) {
+      setAssistantAutoMessage(reason?.message || 'Не удалось выполнить цикл локального анализа.');
+    } finally {
+      assistantCycleLock.current = false;
+    }
+  }
+
+  async function startAssistantAuto() {
+    if (assistantAutoBusy) return;
+    if (account?.accountType !== 'demo') {
+      setAssistantAutoMessage('Автономная торговля доступна только после подключения MT5 Demo. Live остаётся ручным.');
+      return;
+    }
+    if (!assistantRuntime.modelReady) {
+      setAssistantAutoMessage('Сначала запустите Ollama и убедитесь, что qwen2.5:3b готова.');
+      return;
+    }
+    setAssistantAutoBusy(true);
+    try {
+      const result = await window.moneyWork?.armAssistantAuto?.();
+      if (!result?.ok) { setAssistantAutoMessage(result?.error || 'Не удалось включить помощника.'); return; }
+      setAssistantAutoActive(true);
+      setAssistantAutoMessage('Автономный режим включён для MT5 Demo. Нажмите «Остановить» в любой момент.');
+      window.setTimeout(runAssistantAutoCycle, 0);
+    } catch (reason) {
+      setAssistantAutoMessage(reason?.message || 'Не удалось включить автономный режим.');
+    } finally {
+      setAssistantAutoBusy(false);
+    }
+  }
+
+  async function stopAssistantAuto() {
+    setAssistantAutoBusy(true);
+    try {
+      await window.moneyWork?.disarmAssistantAuto?.();
+      setAssistantAutoActive(false);
+      setAssistantAutoMessage('Автономный режим остановлен.');
+    } catch (reason) {
+      setAssistantAutoMessage(reason?.message || 'Не удалось остановить помощника.');
+    } finally {
+      setAssistantAutoBusy(false);
+    }
+  }
+
+  async function reviewAssistantJournalNow() {
+    setAssistantTrainingMessage('Локальный разбор журнала…');
+    try {
+      const result = await window.moneyWork?.reviewAssistantNow?.();
+      setAssistantTrainingMessage(result?.ok ? `Вывод помощника: ${result.note}` : result?.error || 'Не удалось разобрать журнал.');
+    } catch (reason) {
+      setAssistantTrainingMessage(reason?.message || 'Не удалось разобрать журнал.');
+    }
+  }
+
   async function submitAssistantCommand(event) {
     event.preventDefault();
     const command = assistantCommand.trim();
@@ -525,12 +622,22 @@ export default function App() {
       </div>
       {assistantSetupBusy && assistantSetupProgress && <div className="assistant-download-status" role="status">{assistantSetupProgress.percent === null ? assistantSetupProgress.status : `Загрузка модели: ${assistantSetupProgress.percent}%`}</div>}
       {assistantSetupMessage && <div className="assistant-setup-message" role="status">{assistantSetupMessage}</div>}
+      <div className={`assistant-auto-controls ${assistantAutoActive ? 'is-armed' : ''}`}>
+        <div className="assistant-auto-copy"><strong>{assistantAutoActive ? 'Автономный Demo-режим включён' : 'Автономный режим остановлен'}</strong><span>Анализ M15 MT5 + публичные заголовки; журнал хранится локально.</span></div>
+        {assistantAutoActive
+          ? <button className="assistant-stop-button" type="button" disabled={assistantAutoBusy} onClick={stopAssistantAuto}>{assistantAutoBusy ? 'Остановка…' : 'Остановить'}</button>
+          : <button className="assistant-start-button" type="button" disabled={assistantAutoBusy || !assistantRuntime.modelReady || !account || account.accountType !== 'demo'} onClick={startAssistantAuto}>{assistantAutoBusy ? 'Запуск…' : 'Разрешить и запустить на Demo'}</button>}
+        <button className="assistant-review-button" type="button" disabled={!assistantRuntime.modelReady} onClick={reviewAssistantJournalNow}>Разбор журнала</button>
+      </div>
+      {assistantAutoMessage && <div className="assistant-auto-message" role="status" aria-live="polite">{assistantAutoMessage}</div>}
+      {assistantTrainingMessage && <div className="assistant-learning-message" role="status" aria-live="polite">{assistantTrainingMessage}</div>}
+      <p className="assistant-auto-warning">Автономные ордера включаются только вручную и только на MT5 Demo; на Live помощник не торгует, для каждой Live-операции требуется LIVE. Сохраняются SL/TP, лимит объёма и проверки MT5. Остановка не отменяет ордер, уже отправленный брокеру. Новости — публичные заголовки, они могут быть неточными. Раз в час — разбор журнала до 5 минут; веса модели не переобучаются. Уверенность — самооценка модели, не вероятность.</p>
       <form className="assistant-form" onSubmit={submitAssistantCommand}>
         <textarea aria-label="Команда локальному помощнику" maxLength={600} rows={2} value={assistantCommand} onChange={(event) => setAssistantCommand(event.target.value)} placeholder="Например: сделай интерфейс компактнее и скрой список сделок" />
         <button type="submit" disabled={assistantBusy || !assistantCommand.trim()}>{assistantBusy ? <><LoaderCircle size={15} className="spin" /> Думаю…</> : 'Выполнить'}</button>
       </form>
       {assistantMessage && <div className="assistant-message" role="status" aria-live="polite">{assistantMessage}</div>}
-      <p className="assistant-note">Меняет только вид интерфейса — не торговлю, защиты или код. Сначала установите Ollama; затем помощник сам загрузит модель qwen2.5:3b по кнопке выше. Для первой загрузки нужен интернет.</p>
+      <p className="assistant-note">Команды чата меняют вид. Авто-ордера запускаются отдельной кнопкой только на Demo; Live всегда остаётся ручным. Ollama и qwen2.5:3b работают локально; первичная загрузка модели требует интернета.</p>
     </section>
     {pendingAction && <form className="live-action-panel" onSubmit={submitLiveAction}>
       <div className="live-action-copy">
