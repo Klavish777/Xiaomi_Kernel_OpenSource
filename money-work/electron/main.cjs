@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -10,6 +10,24 @@ let stdoutBuffer = '';
 let bridgeDiagnostic = '';
 const pending = new Map();
 const accountFile = () => path.join(app.getPath('userData'), 'mt5-account.bin');
+const assistantModel = 'qwen2.5:3b';
+const ollamaApi = 'http://127.0.0.1:11434/api';
+
+async function getAssistantModelStatus() {
+  try {
+    const response = await fetch(`${ollamaApi}/tags`, { signal: AbortSignal.timeout(2500) });
+    if (!response.ok) return { running: false, modelReady: false };
+    const data = await response.json();
+    const models = Array.isArray(data.models) ? data.models : [];
+    return { running: true, modelReady: models.some((model) => [model.name, model.model].includes(assistantModel)) };
+  } catch (_) {
+    return { running: false, modelReady: false };
+  }
+}
+
+function sendAssistantProgress(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('assistant:setup-progress', payload);
+}
 
 function sendEvent(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mt5:event', payload);
@@ -234,9 +252,63 @@ ipcMain.handle('mt5:close-position', async (_event, payload) => {
   return result.result;
 });
 
+ipcMain.handle('assistant:status', async () => getAssistantModelStatus());
+
+ipcMain.handle('assistant:open-download', async () => {
+  await shell.openExternal('https://ollama.com/download/windows');
+  return { opened: true };
+});
+
+ipcMain.handle('assistant:setup-model', async () => {
+  const status = await getAssistantModelStatus();
+  if (!status.running) {
+    return { ok: false, error: 'Сначала установите и запустите Ollama. Нажмите «Установить Ollama», затем вернитесь сюда и проверьте подключение.' };
+  }
+  if (status.modelReady) return { ok: true, ready: true };
+  try {
+    const response = await fetch(`${ollamaApi}/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: assistantModel, stream: true }),
+    });
+    if (!response.ok || !response.body) {
+      const body = await response.json().catch(() => ({}));
+      return { ok: false, error: body.error || `Не удалось загрузить модель (HTTP ${response.status}).` };
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      buffered += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffered.split('\n');
+      buffered = lines.pop() || '';
+      if (done && buffered.trim()) { lines.push(buffered); buffered = ''; }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let event;
+        try { event = JSON.parse(line); } catch (_) { continue; }
+        if (event.error) return { ok: false, error: String(event.error) };
+        const percent = Number(event.total) > 0 ? Math.min(100, Math.round(Number(event.completed || 0) / Number(event.total) * 100)) : null;
+        sendAssistantProgress({ status: String(event.status || 'Загрузка локальной модели…'), percent });
+      }
+      if (done) break;
+    }
+    const finalStatus = await getAssistantModelStatus();
+    return finalStatus.modelReady
+      ? { ok: true, ready: true }
+      : { ok: false, error: 'Ollama завершила загрузку, но модель пока не появилась в списке. Проверьте Ollama и нажмите «Проверить снова».' };
+  } catch (error) {
+    return { ok: false, error: `Ошибка загрузки локальной модели: ${error?.message || String(error)}` };
+  }
+});
+
 ipcMain.handle('assistant:command', async (_event, payload) => {
+  const modelStatus = await getAssistantModelStatus();
+  if (!modelStatus.running) return { error: 'Ollama не запущена. Откройте Ollama и нажмите «Проверить подключение» в блоке AI-помощника.' };
+  if (!modelStatus.modelReady) return { error: 'Модель qwen2.5:3b ещё не установлена. Нажмите «Загрузить модель» в блоке AI-помощника.' };
   const command = String(payload?.command || '').trim();
-  if (!command || command.length > 600) throw new Error('Введите команду длиной не более 600 символов.');
+  if (!command || command.length > 600) return { error: 'Введите команду длиной не более 600 символов.' };
   const currentSettings = {
     compact: payload?.currentSettings?.compact === true,
     showSummary: payload?.currentSettings?.showSummary !== false,
@@ -263,12 +335,12 @@ ipcMain.handle('assistant:command', async (_event, payload) => {
   const timeout = setTimeout(() => controller.abort(), 90000);
   let result;
   try {
-    const httpResponse = await fetch('http://127.0.0.1:11434/api/chat', {
+    const httpResponse = await fetch(`${ollamaApi}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
       body: JSON.stringify({
-        model: 'qwen2.5:3b',
+        model: assistantModel,
         stream: false,
         format: responseSchema,
         messages: [
@@ -290,23 +362,23 @@ ipcMain.handle('assistant:command', async (_event, payload) => {
     if (typeof content !== 'string') throw new Error('Локальная модель вернула пустой ответ.');
     result = JSON.parse(content);
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('Локальная модель не ответила за 90 секунд.');
+    if (error?.name === 'AbortError') return { error: 'Локальная модель не ответила за 90 секунд.' };
     if (String(error?.message || '').includes('fetch failed') || error?.cause?.code === 'ECONNREFUSED') {
-      throw new Error('Не удалось подключиться к Ollama на этом компьютере. Запустите Ollama и установите модель qwen2.5:3b.');
+      return { error: 'Не удалось подключиться к Ollama. Запустите приложение Ollama и проверьте его статус ниже.' };
     }
-    throw error;
+    return { error: error?.message || 'Локальная модель вернула ошибку.' };
   } finally {
     clearTimeout(timeout);
   }
 
   if (!result || typeof result.reply !== 'string' || !result.changes || typeof result.changes !== 'object') {
-    throw new Error('Локальная модель вернула ответ в неподдерживаемом формате.');
+    return { error: 'Локальная модель вернула ответ в неподдерживаемом формате. Попробуйте переформулировать команду.' };
   }
   const changes = {};
   for (const key of ['compact', 'showSummary', 'showPositions']) {
     if (typeof result.changes[key] === 'boolean') changes[key] = result.changes[key];
   }
-  return { reply: result.reply.slice(0, 1600), changes };
+  return { ok: true, reply: result.reply.slice(0, 1600), changes };
 });
 
 ipcMain.handle('mt5:manual-order', async (_event, payload) => {

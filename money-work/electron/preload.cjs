@@ -12,6 +12,14 @@ contextBridge.exposeInMainWorld('moneyWork', {
   getMt5Positions: () => ipcRenderer.invoke('mt5:positions'),
   closeMt5Position: (payload) => ipcRenderer.invoke('mt5:close-position', payload),
   askLocalAssistant: (payload) => ipcRenderer.invoke('assistant:command', payload),
+  getAssistantStatus: () => ipcRenderer.invoke('assistant:status'),
+  openAssistantDownload: () => ipcRenderer.invoke('assistant:open-download'),
+  setupAssistantModel: () => ipcRenderer.invoke('assistant:setup-model'),
+  onAssistantSetupProgress: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('assistant:setup-progress', listener);
+    return () => ipcRenderer.removeListener('assistant:setup-progress', listener);
+  },
   placeMt5ManualOrder: (payload) => ipcRenderer.invoke('mt5:manual-order', payload),
   onMt5Event: (callback) => {
     const listener = (_event, payload) => callback(payload);

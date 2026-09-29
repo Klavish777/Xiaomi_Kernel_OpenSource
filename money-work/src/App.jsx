@@ -99,6 +99,10 @@ export default function App() {
   const [assistantCommand, setAssistantCommand] = useState('');
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantMessage, setAssistantMessage] = useState('');
+  const [assistantRuntime, setAssistantRuntime] = useState({ checking: true, running: false, modelReady: false });
+  const [assistantSetupBusy, setAssistantSetupBusy] = useState(false);
+  const [assistantSetupMessage, setAssistantSetupMessage] = useState('');
+  const [assistantSetupProgress, setAssistantSetupProgress] = useState(null);
   const actionBusyRef = useRef(false);
   const [now, setNow] = useState(Date.now());
   const symbolRef = useRef(symbol);
@@ -115,6 +119,27 @@ export default function App() {
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!window.moneyWork?.getAssistantStatus) {
+      setAssistantRuntime({ checking: false, running: false, modelReady: false });
+      return undefined;
+    }
+    let active = true;
+    const refreshStatus = async () => {
+      try {
+        const status = await window.moneyWork.getAssistantStatus();
+        if (active) setAssistantRuntime({ checking: false, ...status });
+      } catch (_) {
+        if (active) setAssistantRuntime({ checking: false, running: false, modelReady: false });
+      }
+    };
+    const unsubscribe = window.moneyWork.onAssistantSetupProgress?.((progress) => {
+      if (active) setAssistantSetupProgress(progress);
+    });
+    refreshStatus();
+    return () => { active = false; unsubscribe?.(); };
   }, []);
 
   const syncAccount = useCallback(async () => {
@@ -370,10 +395,58 @@ export default function App() {
     setLiveText('');
   }
 
+  async function refreshAssistantStatus() {
+    if (!window.moneyWork?.getAssistantStatus) return;
+    setAssistantRuntime((current) => ({ ...current, checking: true }));
+    try {
+      const status = await window.moneyWork.getAssistantStatus();
+      setAssistantRuntime({ checking: false, ...status });
+      setAssistantSetupMessage(status.modelReady ? 'Локальный помощник готов.' : status.running ? 'Ollama запущена. Загрузите модель кнопкой ниже.' : 'Установите и запустите Ollama, затем проверьте подключение снова.');
+    } catch (_) {
+      setAssistantRuntime({ checking: false, running: false, modelReady: false });
+      setAssistantSetupMessage('Не удалось проверить Ollama. Установите её, запустите и повторите проверку.');
+    }
+  }
+
+  async function openAssistantInstaller() {
+    try {
+      await window.moneyWork?.openAssistantDownload?.();
+      setAssistantSetupMessage('Установите Ollama в открывшемся окне. После установки запустите её, вернитесь сюда и нажмите «Проверить снова».');
+    } catch (_) {
+      setAssistantSetupMessage('Не удалось открыть сайт Ollama. Откройте вручную: ollama.com/download/windows');
+    }
+  }
+
+  async function setupAssistantModel() {
+    if (assistantSetupBusy) return;
+    setAssistantSetupBusy(true);
+    setAssistantSetupMessage('Подготовка локальной модели…');
+    setAssistantSetupProgress({ status: 'Подключение к Ollama…', percent: null });
+    try {
+      const result = await window.moneyWork?.setupAssistantModel?.();
+      if (!result?.ok) {
+        await refreshAssistantStatus();
+        setAssistantSetupMessage(result?.error || 'Не удалось запустить настройку модели.');
+        return;
+      }
+      setAssistantRuntime({ checking: false, running: true, modelReady: true });
+      setAssistantSetupMessage('Модель установлена. Локальный помощник готов.');
+      setAssistantSetupProgress(null);
+    } catch (reason) {
+      setAssistantSetupMessage(reason?.message || 'Не удалось загрузить модель. Проверьте, что Ollama запущена.');
+    } finally {
+      setAssistantSetupBusy(false);
+    }
+  }
+
   async function submitAssistantCommand(event) {
     event.preventDefault();
     const command = assistantCommand.trim();
     if (!command || assistantBusy) return;
+    if (!assistantRuntime.modelReady) {
+      setAssistantMessage(assistantRuntime.running ? 'Сначала установите qwen2.5:3b кнопкой «Загрузить модель».' : 'Сначала установите и запустите Ollama, затем нажмите «Проверить снова».');
+      return;
+    }
     if (!window.moneyWork?.askLocalAssistant) {
       setAssistantMessage('Локальный помощник доступен в установленном приложении Money Work.');
       return;
@@ -382,6 +455,7 @@ export default function App() {
     setAssistantMessage('Запрос обрабатывается локальной моделью…');
     try {
       const result = await window.moneyWork.askLocalAssistant({ command, currentSettings: assistantSettings });
+      if (result?.error) { setAssistantMessage(result.error); return; }
       const changes = Object.fromEntries(
         Object.entries(result?.changes || {}).filter(([key, value]) => ['compact', 'showSummary', 'showPositions'].includes(key) && typeof value === 'boolean'),
       );
@@ -443,12 +517,20 @@ export default function App() {
         <div><strong>Локальный AI-помощник</strong><span>Ollama · Qwen2.5 3B · работает на этом компьютере</span></div>
         <span className="assistant-local-badge">LOCAL</span>
       </div>
+      <div className={`assistant-runtime-row ${assistantRuntime.modelReady ? 'is-ready' : 'is-pending'}`}>
+        <span className="assistant-runtime-status">{assistantRuntime.checking ? 'Проверка Ollama…' : assistantRuntime.modelReady ? 'Ollama и модель готовы' : assistantRuntime.running ? 'Ollama запущена, модель не загружена' : 'Ollama не найдена или не запущена'}</span>
+        {!assistantRuntime.running && !assistantRuntime.checking && <button type="button" disabled={assistantSetupBusy} onClick={openAssistantInstaller}>Установить Ollama</button>}
+        {assistantRuntime.running && !assistantRuntime.modelReady && <button type="button" disabled={assistantSetupBusy} onClick={setupAssistantModel}>{assistantSetupBusy ? 'Загрузка…' : 'Загрузить qwen2.5:3b'}</button>}
+        <button className="assistant-check-button" type="button" disabled={assistantSetupBusy || assistantRuntime.checking} onClick={refreshAssistantStatus}>{assistantRuntime.modelReady ? 'Проверить связь' : 'Проверить снова'}</button>
+      </div>
+      {assistantSetupBusy && assistantSetupProgress && <div className="assistant-download-status" role="status">{assistantSetupProgress.percent === null ? assistantSetupProgress.status : `Загрузка модели: ${assistantSetupProgress.percent}%`}</div>}
+      {assistantSetupMessage && <div className="assistant-setup-message" role="status">{assistantSetupMessage}</div>}
       <form className="assistant-form" onSubmit={submitAssistantCommand}>
         <textarea aria-label="Команда локальному помощнику" maxLength={600} rows={2} value={assistantCommand} onChange={(event) => setAssistantCommand(event.target.value)} placeholder="Например: сделай интерфейс компактнее и скрой список сделок" />
         <button type="submit" disabled={assistantBusy || !assistantCommand.trim()}>{assistantBusy ? <><LoaderCircle size={15} className="spin" /> Думаю…</> : 'Выполнить'}</button>
       </form>
       {assistantMessage && <div className="assistant-message" role="status" aria-live="polite">{assistantMessage}</div>}
-      <p className="assistant-note">Может менять только вид интерфейса: компактность, сводку счёта и список сделок. Не управляет торговлей, защитами или кодом. Нужны установленная Ollama и модель qwen2.5:3b.</p>
+      <p className="assistant-note">Меняет только вид интерфейса — не торговлю, защиты или код. Сначала установите Ollama; затем помощник сам загрузит модель qwen2.5:3b по кнопке выше. Для первой загрузки нужен интернет.</p>
     </section>
     {pendingAction && <form className="live-action-panel" onSubmit={submitLiveAction}>
       <div className="live-action-copy">
