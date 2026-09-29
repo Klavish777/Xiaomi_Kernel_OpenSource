@@ -1,0 +1,198 @@
+name: Build Money Work for Windows
+
+on:
+  push:
+    branches:
+      - arena/01a0dce0-xiaomi-kernel-opensource
+    paths:
+      - 'money-work/**'
+      - '.github/workflows/money-work-windows.yml'
+  pull_request:
+    branches:
+      - README
+    paths:
+      - 'money-work/**'
+      - '.github/workflows/money-work-windows.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a stable installer after the full Windows test/build job succeeds
+        type: boolean
+        required: false
+        default: false
+      verified_demo:
+        description: Confirm the candidate passed a user-device check on an MT5 Demo account
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python for the MT5 bridge
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Build MT5 manual-order connector
+        working-directory: money-work
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller MetaTrader5 numpy
+          pyinstaller --clean --noconfirm --onefile --collect-all MetaTrader5 --collect-all numpy --collect-submodules numpy --hidden-import=numpy._core._multiarray_umath --name mt5-bridge --distpath bridge/dist --workpath bridge/build bridge/mt5_bridge.py
+          if (!(Test-Path "bridge/dist/mt5-bridge.exe")) { throw "PyInstaller did not produce bridge/dist/mt5-bridge.exe" }
+
+      - name: Smoke test bundled MT5 connector imports NumPy and MT5
+        working-directory: money-work
+        shell: pwsh
+        run: |
+          $reply = '{"action":"status","requestId":1}' | & "bridge/dist/mt5-bridge.exe"
+          if ($LASTEXITCODE -ne 0) { throw "MT5 bridge import smoke test failed with exit code $LASTEXITCODE. Output: $reply" }
+          $response = ($reply | Select-Object -Last 1) | ConvertFrom-Json
+          if ($response.type -ne "response" -or $response.ok -ne $true -or $response.connected -ne $false) {
+            throw "Unexpected MT5 bridge smoke-test response: $reply"
+          }
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: money-work/package-lock.json
+
+      - name: Verify app version
+        working-directory: money-work
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $package = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne $package) { throw "VERSION ($version) differs from package.json ($package)" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+        id: version
+
+      - name: Install app dependencies for tests
+        working-directory: money-work
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+        shell: pwsh
+
+      - name: Run JavaScript manual-only chart tests
+        working-directory: money-work
+        run: |
+          npm run test:js
+          if ($LASTEXITCODE -ne 0) { throw "Money Work JavaScript tests failed" }
+        shell: pwsh
+
+      - name: Run Python trading-risk and mocked MT5 order tests
+        working-directory: money-work
+        run: |
+          python -m unittest discover -s tests -p "test_*.py" -v
+          if ($LASTEXITCODE -ne 0) { throw "Money Work Python bridge/risk tests failed" }
+        shell: pwsh
+
+      - name: Install and build Windows installer
+        working-directory: money-work
+        run: |
+          npm run dist:win
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed" }
+        shell: pwsh
+
+      - name: Verify MT5 connector is inside the unpacked app
+        working-directory: money-work
+        shell: pwsh
+        run: |
+          if (!(Test-Path "release/win-unpacked/resources/mt5-bridge.exe")) {
+            throw "Installer payload is missing release/win-unpacked/resources/mt5-bridge.exe"
+          }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Money-Work-Windows-Installer-${{ github.run_id }}
+          path: money-work/release/Money-Work-Setup-${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  prepare-demo-candidate:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/arena/01a0dce0-xiaomi-kernel-opensource' }}
+    needs: windows-installer
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tested branch
+        uses: actions/checkout@v7
+
+      - name: Download the installer from the successful test/build job
+        uses: actions/download-artifact@v8
+        with:
+          name: Money-Work-Windows-Installer-${{ github.run_id }}
+          path: money-work/release
+
+      - name: Create or refresh an unpublished Demo-test draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content money-work/VERSION -Raw).Trim()
+          $package = (Get-Content money-work/package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne $package) { throw "VERSION ($version) differs from package.json ($package)" }
+          if ($version -notmatch '^\d+\.\d+\.\d+-rc\.\d+$') { Write-Host "Not an RC version; draft creation skipped."; exit 0 }
+          $tag = "money-work-v$version"
+          $installer = "money-work/release/Money-Work-Setup-$version.exe"
+          if (!(Test-Path $installer)) { throw "Tested installer artifact is missing: $installer" }
+          $existingJson = gh release view $tag --json isDraft,isPrerelease 2>$null
+          $viewExit = $LASTEXITCODE
+          if ($viewExit -eq 0) {
+            $existing = ($existingJson | ConvertFrom-Json)
+            if (!$existing.isDraft -or !$existing.isPrerelease) { throw "Refusing to overwrite a published release: $tag" }
+            gh release upload $tag $installer --clobber
+          } else {
+            gh release create $tag $installer --title "Money Work v$version · MT5 Demo candidate" --notes "UNPUBLISHED Demo-test draft built from the Money Work 1.0.0-rc.7 baseline; this is a new RC candidate, not a replacement claim about the existing RC7 installer. Verify it on an MT5 Demo terminal before use. The internet analyst provides advisory-only AUDCAD M15 reports and never places trades. It uses public RSS headlines (cached for 60 seconds) and technical market data; each report can make two OpenAI API calls, and all analysis runs are limited to one per minute. An OpenAI API key is required; only market data and public headlines are sent for analysis, not MT5 credentials or account balance. API usage may incur separate charges. The 0.01-lot maximum, explicit per-order Live confirmation, protective SL/TP, daily-loss stop, 80-million account-currency balance/equity stop, and terminal Algo Trading restrictions remain in force. The right-side summary shows account-currency balance, used MT5 margin, and floating P/L on open positions. Demo BUY/SELL and position-close requests require the user's button click; each Live open or close still requires typing LIVE. No signal accuracy or profit is guaranteed." --draft --prerelease --target $env:GITHUB_SHA
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not create or refresh the unpublished Demo-test draft." }
+
+  publish-release:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && inputs.verified_demo }}
+    needs: windows-installer
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tested branch
+        uses: actions/checkout@v7
+
+      - name: Download the installer from the successful test/build job
+        uses: actions/download-artifact@v8
+        with:
+          name: Money-Work-Windows-Installer-${{ github.run_id }}
+          path: money-work/release
+
+      - name: Publish versioned download
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content money-work/VERSION -Raw).Trim()
+          $package = (Get-Content money-work/package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne $package) { throw "VERSION ($version) differs from package.json ($package)" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Refusing to publish a prerelease or invalid stable version: $version" }
+          $tag = "money-work-v$version"
+          $installer = "money-work/release/Money-Work-Setup-$version.exe"
+          if (!(Test-Path $installer)) { throw "Tested installer artifact is missing: $installer" }
+          $existing = gh release list --json tagName --jq '.[].tagName' | Where-Object { $_ -eq $tag }
+          if ($existing) {
+            gh release upload $tag $installer --clobber
+          } else {
+            gh release create $tag $installer --title "Money Work v$version" --notes "Money Work v$version includes the live MT5 AUDCAD chart, user-initiated manual BUY/SELL/close controls, and an advisory-only AUDCAD M15 internet analyst. The analyst never places orders; it uses public RSS headlines and derived market data, with a one-minute analysis rate limit, 60-second source cache, and up to two OpenAI API calls per report. An OpenAI API key is required and API charges may apply. No MT5 password, account balance, or position list is sent to OpenAI. Manual trading remains restricted by broker/terminal permissions, the 0.01-lot cap, protective SL/TP, daily-loss stop, account-currency equity/balance cap, symbol and spread guards. Live orders and closes each require typing LIVE. Data/analysis may be wrong; no accuracy or profit is guaranteed. Verify this candidate on an MT5 Demo terminal before publication."
+          }

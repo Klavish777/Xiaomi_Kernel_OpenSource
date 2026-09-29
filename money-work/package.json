@@ -1,0 +1,59 @@
+{
+  "name": "money-work",
+  "version": "1.0.0-rc.11",
+  "private": true,
+  "description": "Money Work AUDCAD MT5 chart with internet market analysis and risk-capped manual orders",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "electron:dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "dist:win": "npm run build && electron-builder --win nsis --x64",
+    "test": "node --test && python tests/run_python_tests.py",
+    "test:js": "node --test"
+  },
+  "dependencies": {
+    "@langchain/langgraph": "^1.4.18",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "vite": "^6.0.5",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.moneywork.desktop",
+    "productName": "Money Work",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "bridge/dist/mt5-bridge.exe",
+        "to": "mt5-bridge.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Money-Work-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
