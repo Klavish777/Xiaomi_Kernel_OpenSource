@@ -5,26 +5,11 @@ import './manual.css';
 import './positions.css';
 import './action-controls.css';
 import './account-summary.css';
-import './assistant.css';
+import './market-analyst.css';
 
 const SYMBOL_PREFIX = 'AUDCAD';
 const TIMEFRAME = '15M';
 const QUOTE_FRESH_MS = 30000;
-const ASSISTANT_SETTINGS_KEY = 'money-work-assistant-settings-v1';
-const DEFAULT_ASSISTANT_SETTINGS = Object.freeze({ compact: false, showSummary: true, showPositions: true });
-
-function readAssistantSettings() {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(ASSISTANT_SETTINGS_KEY) || '{}');
-    return {
-      compact: stored.compact === true,
-      showSummary: stored.showSummary !== false,
-      showPositions: stored.showPositions !== false,
-    };
-  } catch (_) {
-    return { ...DEFAULT_ASSISTANT_SETTINGS };
-  }
-}
 
 function price(value, digits = 5) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—';
@@ -95,21 +80,17 @@ export default function App() {
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [notice, setNotice] = useState('');
-  const [assistantSettings, setAssistantSettings] = useState(readAssistantSettings);
-  const [assistantCommand, setAssistantCommand] = useState('');
-  const [assistantBusy, setAssistantBusy] = useState(false);
-  const [assistantMessage, setAssistantMessage] = useState('');
-  const [assistantRuntime, setAssistantRuntime] = useState({ checking: true, running: false, modelReady: false });
-  const [assistantSetupBusy, setAssistantSetupBusy] = useState(false);
-  const [assistantSetupMessage, setAssistantSetupMessage] = useState('');
-  const [assistantSetupProgress, setAssistantSetupProgress] = useState(null);
-  const [assistantAutoActive, setAssistantAutoActive] = useState(false);
-  const [assistantAutoBusy, setAssistantAutoBusy] = useState(false);
-  const [assistantAutoMessage, setAssistantAutoMessage] = useState('');
-  const [assistantTrainingMessage, setAssistantTrainingMessage] = useState('');
+  const [marketAnalystStatus, setMarketAnalystStatus] = useState({ checking: true, configured: false, model: 'gpt-5-mini' });
+  const [marketAnalystKeyInput, setMarketAnalystKeyInput] = useState('');
+  const [marketAnalystKeyBusy, setMarketAnalystKeyBusy] = useState(false);
+  const [marketAnalysisBusy, setMarketAnalysisBusy] = useState(false);
+  const [marketAnalysisError, setMarketAnalysisError] = useState('');
+  const [marketAnalysisReport, setMarketAnalysisReport] = useState(null);
+  const marketAnalysisLock = useRef(false);
+  const observedMarketBarRef = useRef('');
+  const pendingAutomaticBarRef = useRef('');
+  const lastAnalyzedMarketBarRef = useRef('');
   const actionBusyRef = useRef(false);
-  const assistantCycleLock = useRef(false);
-  const assistantDataRef = useRef({ symbol, account, bars, positions });
   const [now, setNow] = useState(Date.now());
   const symbolRef = useRef(symbol);
   const quoteRef = useRef(null);
@@ -128,42 +109,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!window.moneyWork?.getAssistantStatus) {
-      setAssistantRuntime({ checking: false, running: false, modelReady: false });
-      return undefined;
-    }
     let active = true;
-    const refreshStatus = async () => {
-      try {
-        const status = await window.moneyWork.getAssistantStatus();
-        if (active) setAssistantRuntime({ checking: false, ...status });
-      } catch (_) {
-        if (active) setAssistantRuntime({ checking: false, running: false, modelReady: false });
-      }
-      try {
-        const autoStatus = await window.moneyWork.getAssistantAutoStatus?.();
-        if (active) setAssistantAutoActive(autoStatus?.armed === true);
-      } catch (_) { if (active) setAssistantAutoActive(false); }
-    };
-    const unsubscribe = window.moneyWork.onAssistantSetupProgress?.((progress) => {
-      if (!active) return;
-      if (progress?.kind === 'learning') setAssistantTrainingMessage('Идёт ежечасный разбор журнала…');
-      else if (progress?.kind === 'learning-done') setAssistantTrainingMessage(progress.status || 'Разбор завершён.');
-      else setAssistantSetupProgress(progress);
+    const statusPromise = window.moneyWork?.getMarketAnalystStatus?.();
+    if (!statusPromise) {
+      setMarketAnalystStatus({ checking: false, configured: false, model: 'gpt-5-mini' });
+      return () => { active = false; };
+    }
+    statusPromise.then((status) => {
+      if (active) setMarketAnalystStatus({ checking: false, ...status });
+    }).catch(() => {
+      if (active) setMarketAnalystStatus({ checking: false, configured: false, model: 'gpt-5-mini' });
     });
-    refreshStatus();
-    return () => { active = false; unsubscribe?.(); };
+    return () => { active = false; };
   }, []);
-
-  useEffect(() => {
-    assistantDataRef.current = { symbol, account, bars, positions };
-  }, [symbol, account, bars, positions]);
-
-  useEffect(() => {
-    if (!assistantAutoActive) return undefined;
-    const cycle = window.setInterval(() => { void runAssistantAutoCycle(); }, 60000);
-    return () => window.clearInterval(cycle);
-  }, [assistantAutoActive]);
 
   const syncAccount = useCallback(async () => {
     if (!window.moneyWork || syncLock.current) return;
@@ -279,9 +237,91 @@ export default function App() {
   const income = useMemo(() => positions.reduce((total, position) => total + Number(position.netProfit || 0), 0), [positions]);
   const digits = /JPY/i.test(symbol) ? 3 : 5;
 
+  useEffect(() => {
+    const latestBar = bars.at(-1);
+    if (!account || !symbol || !latestBar) return;
+    const currentBarKey = `${symbol}:${latestBar.time}`;
+    if (!observedMarketBarRef.current) {
+      observedMarketBarRef.current = currentBarKey;
+      return;
+    }
+    if (observedMarketBarRef.current !== currentBarKey) {
+      observedMarketBarRef.current = currentBarKey;
+      pendingAutomaticBarRef.current = currentBarKey;
+    }
+    if (pendingAutomaticBarRef.current !== currentBarKey) return;
+    if (lastAnalyzedMarketBarRef.current === currentBarKey) {
+      pendingAutomaticBarRef.current = '';
+      return;
+    }
+    if (!marketAnalystStatus.configured || !quoteFresh || marketAnalysisBusy) return;
+    pendingAutomaticBarRef.current = '';
+    lastAnalyzedMarketBarRef.current = currentBarKey;
+    void runMarketAnalysis({ automatic: true });
+  }, [account?.login, bars.at(-1)?.time, marketAnalystStatus.configured, marketAnalysisBusy, quoteFresh, symbol]);
+
   function openSettings() {
     setError('');
     setModal('settings');
+  }
+
+  async function refreshMarketAnalystStatus() {
+    setMarketAnalystStatus((current) => ({ ...current, checking: true }));
+    try {
+      const status = await window.moneyWork?.getMarketAnalystStatus?.();
+      setMarketAnalystStatus({ checking: false, ...(status || { configured: false, model: 'gpt-5-mini' }) });
+    } catch (_) {
+      setMarketAnalystStatus({ checking: false, configured: false, model: 'gpt-5-mini' });
+    }
+  }
+
+  async function openMarketAnalystKeyPage() {
+    try { await window.moneyWork?.openMarketAnalystKeyPage?.(); }
+    catch (_) { setMarketAnalysisError('Создайте ключ вручную: platform.openai.com/api-keys'); }
+  }
+
+  async function saveMarketAnalystKey() {
+    if (marketAnalystKeyBusy || !marketAnalystKeyInput.trim()) return;
+    setMarketAnalystKeyBusy(true);
+    setMarketAnalysisError('');
+    try {
+      const result = await window.moneyWork?.saveMarketAnalystKey?.(marketAnalystKeyInput);
+      if (!result?.ok) { setMarketAnalysisError(result?.error || 'Не удалось сохранить ключ.'); return; }
+      setMarketAnalystKeyInput('');
+      await refreshMarketAnalystStatus();
+    } catch (reason) { setMarketAnalysisError(reason?.message || 'Не удалось сохранить API key.'); }
+    finally { setMarketAnalystKeyBusy(false); }
+  }
+
+  async function deleteMarketAnalystKey() {
+    if (marketAnalystKeyBusy) return;
+    setMarketAnalystKeyBusy(true);
+    try {
+      const result = await window.moneyWork?.deleteMarketAnalystKey?.();
+      if (!result?.ok) { setMarketAnalysisError(result?.error || 'Не удалось удалить ключ.'); return; }
+      setMarketAnalystStatus((current) => ({ ...current, configured: false }));
+      setMarketAnalysisReport(null);
+      setMarketAnalysisError('OpenAI API key удалён.');
+    } catch (reason) { setMarketAnalysisError(reason?.message || 'Не удалось удалить API key.'); }
+    finally { setMarketAnalystKeyBusy(false); }
+  }
+
+  async function runMarketAnalysis({ automatic = false } = {}) {
+    if (marketAnalysisLock.current || !symbol) return;
+    marketAnalysisLock.current = true;
+    setMarketAnalysisBusy(true);
+    setMarketAnalysisError('');
+    setMarketAnalysisReport(null);
+    try {
+      if (!quoteFresh) { setMarketAnalysisError('Котировка MT5 устарела. Дождитесь свежего тика.'); return; }
+      const result = await window.moneyWork?.analyzeMarket?.({ symbol, quoteReceivedAt: quote?.receivedAt });
+      if (!result?.ok) { setMarketAnalysisError(result?.error || 'Не удалось получить аналитический сигнал.'); return; }
+      setMarketAnalysisReport({ ...result.report, automatic });
+    } catch (reason) { setMarketAnalysisError(reason?.message || 'Не удалось получить аналитический сигнал.'); }
+    finally {
+      marketAnalysisLock.current = false;
+      setMarketAnalysisBusy(false);
+    }
   }
 
   async function connectMt5(event) {
@@ -418,179 +458,22 @@ export default function App() {
     setLiveText('');
   }
 
-  async function refreshAssistantStatus() {
-    if (!window.moneyWork?.getAssistantStatus) return;
-    setAssistantRuntime((current) => ({ ...current, checking: true }));
-    try {
-      const status = await window.moneyWork.getAssistantStatus();
-      setAssistantRuntime({ checking: false, ...status });
-      setAssistantSetupMessage(status.modelReady ? 'Локальный помощник готов.' : status.running ? 'Ollama запущена. Загрузите модель кнопкой ниже.' : 'Установите и запустите Ollama, затем проверьте подключение снова.');
-    } catch (_) {
-      setAssistantRuntime({ checking: false, running: false, modelReady: false });
-      setAssistantSetupMessage('Не удалось проверить Ollama. Установите её, запустите и повторите проверку.');
-    }
-  }
-
-  async function openAssistantInstaller() {
-    try {
-      await window.moneyWork?.openAssistantDownload?.();
-      setAssistantSetupMessage('Установите Ollama в открывшемся окне. После установки запустите её, вернитесь сюда и нажмите «Проверить снова».');
-    } catch (_) {
-      setAssistantSetupMessage('Не удалось открыть сайт Ollama. Откройте вручную: ollama.com/download/windows');
-    }
-  }
-
-  async function setupAssistantModel() {
-    if (assistantSetupBusy) return;
-    setAssistantSetupBusy(true);
-    setAssistantSetupMessage('Подготовка локальной модели…');
-    setAssistantSetupProgress({ status: 'Подключение к Ollama…', percent: null });
-    try {
-      const result = await window.moneyWork?.setupAssistantModel?.();
-      if (!result?.ok) {
-        await refreshAssistantStatus();
-        setAssistantSetupMessage(result?.error || 'Не удалось запустить настройку модели.');
-        return;
-      }
-      setAssistantRuntime({ checking: false, running: true, modelReady: true });
-      setAssistantSetupMessage('Модель установлена. Локальный помощник готов.');
-      setAssistantSetupProgress(null);
-    } catch (reason) {
-      setAssistantSetupMessage(reason?.message || 'Не удалось загрузить модель. Проверьте, что Ollama запущена.');
-    } finally {
-      setAssistantSetupBusy(false);
-    }
-  }
-
-  async function runAssistantAutoCycle() {
-    if (assistantCycleLock.current) return;
-    const current = assistantDataRef.current;
-    if (!current.account || !current.symbol || !window.moneyWork?.runAssistantCycle) return;
-    assistantCycleLock.current = true;
-    try {
-      const result = await window.moneyWork.runAssistantCycle({ symbol: current.symbol });
-      if (!result?.ok) {
-        if (result?.error) setAssistantAutoMessage(result.error);
-        if (result?.error?.includes('stopped') || result?.error?.includes('остановлен')) setAssistantAutoActive(false);
-        return;
-      }
-      if (!result.skipped) {
-        const execution = result.execution?.state;
-        const actionText = { WAIT: 'Ожидание', BUY: 'Решение BUY', SELL: 'Решение SELL', CLOSE: 'Решение закрыть' }[result.action] || result.action;
-        const executionText = execution === 'manual_order_placed' ? ' · Demo-ордер отправлен' : execution === 'position_closed' ? ' · Demo-позиция закрыта' : execution === 'blocked' ? ' · ордер остановлен защитной проверкой' : '';
-        setAssistantAutoMessage(`${actionText} · уверенность ${result.confidence}%${executionText}. ${result.reason || ''}`);
-        if (result.execution?.reason === 'account_or_terminal_permissions_changed') setAssistantAutoActive(false);
-        await Promise.all([syncAccount(), syncPositions()]);
-      }
-    } catch (reason) {
-      setAssistantAutoMessage(reason?.message || 'Не удалось выполнить цикл локального анализа.');
-    } finally {
-      assistantCycleLock.current = false;
-    }
-  }
-
-  async function startAssistantAuto() {
-    if (assistantAutoBusy) return;
-    if (account?.accountType !== 'demo') {
-      setAssistantAutoMessage('Автономная торговля доступна только после подключения MT5 Demo. Live остаётся ручным.');
-      return;
-    }
-    if (!assistantRuntime.modelReady) {
-      setAssistantAutoMessage('Сначала запустите Ollama и убедитесь, что qwen2.5:3b готова.');
-      return;
-    }
-    setAssistantAutoBusy(true);
-    try {
-      const result = await window.moneyWork?.armAssistantAuto?.();
-      if (!result?.ok) { setAssistantAutoMessage(result?.error || 'Не удалось включить помощника.'); return; }
-      setAssistantAutoActive(true);
-      setAssistantAutoMessage('Автономный режим включён для MT5 Demo. Нажмите «Остановить» в любой момент.');
-      window.setTimeout(runAssistantAutoCycle, 0);
-    } catch (reason) {
-      setAssistantAutoMessage(reason?.message || 'Не удалось включить автономный режим.');
-    } finally {
-      setAssistantAutoBusy(false);
-    }
-  }
-
-  async function stopAssistantAuto() {
-    setAssistantAutoBusy(true);
-    try {
-      await window.moneyWork?.disarmAssistantAuto?.();
-      setAssistantAutoActive(false);
-      setAssistantAutoMessage('Автономный режим остановлен.');
-    } catch (reason) {
-      setAssistantAutoMessage(reason?.message || 'Не удалось остановить помощника.');
-    } finally {
-      setAssistantAutoBusy(false);
-    }
-  }
-
-  async function reviewAssistantJournalNow() {
-    setAssistantTrainingMessage('Локальный разбор журнала…');
-    try {
-      const result = await window.moneyWork?.reviewAssistantNow?.();
-      setAssistantTrainingMessage(result?.ok ? `Вывод помощника: ${result.note}` : result?.error || 'Не удалось разобрать журнал.');
-    } catch (reason) {
-      setAssistantTrainingMessage(reason?.message || 'Не удалось разобрать журнал.');
-    }
-  }
-
-  async function submitAssistantCommand(event) {
-    event.preventDefault();
-    const command = assistantCommand.trim();
-    if (!command || assistantBusy) return;
-    if (!assistantRuntime.modelReady) {
-      setAssistantMessage(assistantRuntime.running ? 'Сначала установите qwen2.5:3b кнопкой «Загрузить модель».' : 'Сначала установите и запустите Ollama, затем нажмите «Проверить снова».');
-      return;
-    }
-    if (!window.moneyWork?.askLocalAssistant) {
-      setAssistantMessage('Локальный помощник доступен в установленном приложении Money Work.');
-      return;
-    }
-    setAssistantBusy(true);
-    setAssistantMessage('Запрос обрабатывается локальной моделью…');
-    try {
-      const result = await window.moneyWork.askLocalAssistant({ command, currentSettings: assistantSettings });
-      if (result?.error) { setAssistantMessage(result.error); return; }
-      const changes = Object.fromEntries(
-        Object.entries(result?.changes || {}).filter(([key, value]) => ['compact', 'showSummary', 'showPositions'].includes(key) && typeof value === 'boolean'),
-      );
-      const applied = Object.entries(changes).filter(([key, value]) => assistantSettings[key] !== value).map(([key]) => ({
-        compact: 'компактный режим',
-        showSummary: 'сводка счёта',
-        showPositions: 'список открытых сделок',
-      })[key]);
-      if (Object.keys(changes).length) {
-        const next = { ...assistantSettings, ...changes };
-        setAssistantSettings(next);
-        try { window.localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(next)); } catch (_) { /* settings still apply for this session */ }
-      }
-      const actualChanges = applied.length ? ` · Применено: ${applied.join(', ')}.` : '';
-      setAssistantMessage(`${String(result?.reply || 'Готово.').slice(0, 1600)}${actualChanges}`);
-    } catch (reason) {
-      setAssistantMessage(reason?.message || String(reason));
-    } finally {
-      setAssistantBusy(false);
-    }
-  }
-
-  return <main className={`mw-app${assistantSettings.compact ? ' mw-compact' : ''}`}>
+  return <main className="mw-app">
     <button className="settings-button" type="button" onClick={openSettings} aria-label="Настройки MT5" title="Настройки MT5"><Settings size={20} /></button>
     <section className="dashboard-top">
       <section className="chart-area" aria-label="График MT5">
         <span className="chart-symbol">{symbol || 'AUDCAD'} · {TIMEFRAME}</span>
         <PriceChart bars={bars} symbol={symbol} />
       </section>
-      {assistantSettings.showSummary && <aside className="account-summary" aria-label="Баланс аккаунта">
+      <aside className="account-summary" aria-label="Баланс аккаунта">
         <div className="summary-heading"><strong>АККАУНТ</strong><span className={account?.accountType === 'real' ? 'live-badge' : 'demo-badge'}>{account ? account.accountType.toUpperCase() : 'MT5'}</span></div>
         <div className="summary-metric"><span>Всего на балансе</span><strong>{account ? accountMoney(account.balance, account.currency) : '—'}</strong></div>
         <div className="summary-metric"><span>Заложено в работу</span><strong>{account ? accountMoney(account.margin, account.currency) : '—'}</strong><small>Маржа MT5</small></div>
         <div className="summary-metric"><span>Доход</span><strong className={income < 0 ? 'income-negative' : 'income-positive'}>{account ? cash(income, account.currency) : '—'}</strong><small>Плавающий P/L открытых сделок</small></div>
         {!account && <div className="summary-connect">Подключите MT5, чтобы увидеть показатели счёта.</div>}
-      </aside>}
+      </aside>
     </section>
-    {assistantSettings.showPositions && <section className="positions-panel" aria-label="Открытые сделки MT5">
+    <section className="positions-panel" aria-label="Открытые сделки MT5">
       <div className="positions-heading">
         <div><strong>Открытые сделки</strong><span>{account ? `${positions.length} · ${account.currency || 'валюта счёта'}` : 'Подключите MT5'}</span></div>
         {account && <button className="positions-refresh" type="button" aria-label="Обновить открытые сделки" title="Обновить" disabled={positionsBusy} onClick={syncPositions}><RefreshCw size={15} className={positionsBusy ? 'spin' : ''} /></button>}
@@ -608,36 +491,38 @@ export default function App() {
           <button className="close-position-button" type="button" disabled={actionBusy || Boolean(pendingAction)} onClick={() => beginClosePosition(position)} aria-label={`Закрыть ${position.side} ${position.symbol}, позиция ${position.ticket}`}><CircleX size={15} /> Закрыть</button>
         </div>)}
       </div>}
-    </section>}
-    <section className="local-assistant-panel" aria-label="Локальный AI-помощник">
-      <div className="local-assistant-heading">
-        <div><strong>Локальный AI-помощник</strong><span>Ollama · Qwen2.5 3B · работает на этом компьютере</span></div>
-        <span className="assistant-local-badge">LOCAL</span>
+    </section>
+    <section className="market-analyst-panel" aria-label="Интернет-аналитик рынка">
+      <div className="market-analyst-heading">
+        <div><strong>Интернет-аналитик рынка</strong><span>LangGraph · авто на новой M15-свече · не чаще 1 раза в минуту · RSS-кэш 60 с</span></div>
+        <span className="market-analyst-badge">AUDCAD · M15</span>
       </div>
-      <div className={`assistant-runtime-row ${assistantRuntime.modelReady ? 'is-ready' : 'is-pending'}`}>
-        <span className="assistant-runtime-status">{assistantRuntime.checking ? 'Проверка Ollama…' : assistantRuntime.modelReady ? 'Ollama и модель готовы' : assistantRuntime.running ? 'Ollama запущена, модель не загружена' : 'Ollama не найдена или не запущена'}</span>
-        {!assistantRuntime.running && !assistantRuntime.checking && <button type="button" disabled={assistantSetupBusy} onClick={openAssistantInstaller}>Установить Ollama</button>}
-        {assistantRuntime.running && !assistantRuntime.modelReady && <button type="button" disabled={assistantSetupBusy} onClick={setupAssistantModel}>{assistantSetupBusy ? 'Загрузка…' : 'Загрузить qwen2.5:3b'}</button>}
-        <button className="assistant-check-button" type="button" disabled={assistantSetupBusy || assistantRuntime.checking} onClick={refreshAssistantStatus}>{assistantRuntime.modelReady ? 'Проверить связь' : 'Проверить снова'}</button>
+      <div className="market-analyst-key-row">
+        <span className={marketAnalystStatus.configured ? 'analyst-key-ready' : 'analyst-key-missing'}>{marketAnalystStatus.checking ? 'Проверка API key…' : marketAnalystStatus.configured ? `OpenAI API настроен · ${marketAnalystStatus.model}` : 'Добавьте OpenAI API key для анализа'}</span>
+        <input type="password" autoComplete="new-password" spellCheck="false" aria-label="OpenAI API key для аналитика" value={marketAnalystKeyInput} onChange={(event) => setMarketAnalystKeyInput(event.target.value)} placeholder="sk-…" />
+        <button type="button" disabled={marketAnalystKeyBusy || !marketAnalystKeyInput.trim()} onClick={saveMarketAnalystKey}>{marketAnalystKeyBusy ? 'Сохранение…' : 'Сохранить ключ'}</button>
+        <button type="button" disabled={marketAnalystKeyBusy} onClick={openMarketAnalystKeyPage}>Получить ключ</button>
+        {marketAnalystStatus.configured && <button type="button" disabled={marketAnalystKeyBusy} onClick={deleteMarketAnalystKey}>Удалить</button>}
       </div>
-      {assistantSetupBusy && assistantSetupProgress && <div className="assistant-download-status" role="status">{assistantSetupProgress.percent === null ? assistantSetupProgress.status : `Загрузка модели: ${assistantSetupProgress.percent}%`}</div>}
-      {assistantSetupMessage && <div className="assistant-setup-message" role="status">{assistantSetupMessage}</div>}
-      <div className={`assistant-auto-controls ${assistantAutoActive ? 'is-armed' : ''}`}>
-        <div className="assistant-auto-copy"><strong>{assistantAutoActive ? 'Автономный Demo-режим включён' : 'Автономный режим остановлен'}</strong><span>Анализ M15 MT5 + публичные заголовки; журнал хранится локально.</span></div>
-        {assistantAutoActive
-          ? <button className="assistant-stop-button" type="button" disabled={assistantAutoBusy} onClick={stopAssistantAuto}>{assistantAutoBusy ? 'Остановка…' : 'Остановить'}</button>
-          : <button className="assistant-start-button" type="button" disabled={assistantAutoBusy || !assistantRuntime.modelReady || !account || account.accountType !== 'demo'} onClick={startAssistantAuto}>{assistantAutoBusy ? 'Запуск…' : 'Разрешить и запустить на Demo'}</button>}
-        <button className="assistant-review-button" type="button" disabled={!assistantRuntime.modelReady} onClick={reviewAssistantJournalNow}>Разбор журнала</button>
-      </div>
-      {assistantAutoMessage && <div className="assistant-auto-message" role="status" aria-live="polite">{assistantAutoMessage}</div>}
-      {assistantTrainingMessage && <div className="assistant-learning-message" role="status" aria-live="polite">{assistantTrainingMessage}</div>}
-      <p className="assistant-auto-warning">Автономные ордера включаются только вручную и только на MT5 Demo; на Live помощник не торгует, для каждой Live-операции требуется LIVE. Сохраняются SL/TP, лимит объёма и проверки MT5. Остановка не отменяет ордер, уже отправленный брокеру. Новости — публичные заголовки, они могут быть неточными. Раз в час — разбор журнала до 5 минут; веса модели не переобучаются. Уверенность — самооценка модели, не вероятность.</p>
-      <form className="assistant-form" onSubmit={submitAssistantCommand}>
-        <textarea aria-label="Команда локальному помощнику" maxLength={600} rows={2} value={assistantCommand} onChange={(event) => setAssistantCommand(event.target.value)} placeholder="Например: сделай интерфейс компактнее и скрой список сделок" />
-        <button type="submit" disabled={assistantBusy || !assistantCommand.trim()}>{assistantBusy ? <><LoaderCircle size={15} className="spin" /> Думаю…</> : 'Выполнить'}</button>
-      </form>
-      {assistantMessage && <div className="assistant-message" role="status" aria-live="polite">{assistantMessage}</div>}
-      <p className="assistant-note">Команды чата меняют вид. Авто-ордера запускаются отдельной кнопкой только на Demo; Live всегда остаётся ручным. Ollama и qwen2.5:3b работают локально; первичная загрузка модели требует интернета.</p>
+      <button className="market-analysis-button" type="button" disabled={!marketAnalystStatus.configured || !symbol || !quoteFresh || marketAnalysisBusy} onClick={runMarketAnalysis}>
+        {marketAnalysisBusy ? <><LoaderCircle size={14} className="spin" /> Анализирую источники…</> : 'Получить торговый сигнал'}
+      </button>
+      {marketAnalysisError && <div className="market-analysis-error" role="alert">{marketAnalysisError}</div>}
+      {marketAnalysisReport && <div className="market-analysis-result">
+        <div className={`market-signal market-signal-${marketAnalysisReport.signal.toLowerCase()}`}>
+          <strong>{marketAnalysisReport.signal === 'BUY' ? 'BUY · бычий сценарий' : marketAnalysisReport.signal === 'SELL' ? 'SELL · медвежий сценарий' : 'WAIT · сигнала нет'}</strong>
+          <span>Уверенность: {marketAnalysisReport.confidence}% · {new Date(marketAnalysisReport.generatedAt).toLocaleString()} · {marketAnalysisReport.automatic ? 'авто M15' : 'по запросу'}</span>
+        </div>
+        <p>{marketAnalysisReport.rationale}</p>
+        <div className="market-debate-cases"><span><b>За рост:</b> {marketAnalysisReport.bullCase}</span><span><b>За снижение:</b> {marketAnalysisReport.bearCase}</span></div>
+        <div className="market-source-summary">Источники: {marketAnalysisReport.sourceStatus.map((source) => `${source.name} — ${source.ok ? `${source.itemCount} публикаций` : 'нет доступа'}`).join(' · ')}{marketAnalysisReport.sourceCache?.reused ? ` · RSS-кэш ${marketAnalysisReport.sourceCache.ageSeconds} с` : ' · RSS обновлён'}</div>
+        {marketAnalysisReport.reflection?.evaluated > 0 && <div className="market-reflection-summary">Итоги прошлых сигналов через 4 свечи: верно {marketAnalysisReport.reflection.correct}, неверно {marketAnalysisReport.reflection.wrong}, без движения {marketAnalysisReport.reflection.flat}{marketAnalysisReport.reflection.directionalAccuracyPercent === null ? '' : ` · точность направления ${marketAnalysisReport.reflection.directionalAccuracyPercent}%`}{marketAnalysisReport.reflection.sampleSizeIsSmall ? ' · мало наблюдений, оценка ненадёжна' : ''}.</div>}
+        {marketAnalysisReport.sources.length > 0 && <details className="market-source-details"><summary>Заголовки и источники ({marketAnalysisReport.sources.length})</summary>
+          {marketAnalysisReport.sources.slice(0, 8).map((source) => <div className="market-source-item" key={source.id}><span>{source.official ? 'OFFICIAL' : 'NEWS'} · {source.source}</span><strong>{source.title}</strong><small>{source.publishedAt ? new Date(source.publishedAt).toLocaleString() : 'Время публикации не указано'}</small></div>)}
+        </details>}
+        {marketAnalysisReport.riskFlags.length > 0 && <ul className="market-risk-flags">{marketAnalysisReport.riskFlags.map((flag) => <li key={flag}>{flag}</li>)}</ul>}
+      </div>}
+      <p className="market-analyst-disclosure">Сигнал информационный: ордер не отправляется. В OpenAI передаются M15-цены/индикаторы и публичные заголовки — не пароль MT5 и не баланс счёта. API может тарифицироваться отдельно от ChatGPT. Сетевые данные могут быть устаревшими/ошибочными; сигнал не гарантирует точность или прибыль.</p>
     </section>
     {pendingAction && <form className="live-action-panel" onSubmit={submitLiveAction}>
       <div className="live-action-copy">

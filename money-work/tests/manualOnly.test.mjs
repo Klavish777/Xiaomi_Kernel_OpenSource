@@ -51,7 +51,7 @@ test('new MT5 ticks update the current timeframe candle without adding second-le
 
 test('renderer, Electron IPC and Python bridge expose no automatic strategy or paper-balance paths', async () => {
   const paths = [
-    '../src/App.jsx', '../electron/main.cjs', '../electron/preload.cjs', '../bridge/mt5_bridge.py', '../bridge/trading_policy.py',
+    '../src/App.jsx', '../electron/main.cjs', '../electron/preload.cjs', '../bridge/mt5_bridge.py', '../bridge/trading_policy.py', '../electron/market-analyst.cjs',
   ];
   const sources = await Promise.all(paths.map((path) => readFile(new URL(path, import.meta.url), 'utf8')));
   for (const source of sources) {
@@ -70,33 +70,6 @@ test('renderer, Electron IPC and Python bridge expose no automatic strategy or p
   assert.match(sources[0], /Заложено в работу/);
   assert.match(sources[0], /Плавающий P\/L открытых сделок/);
   assert.match(sources[0], /account\.margin/);
-  assert.match(sources[0], /askLocalAssistant/);
-  assert.match(sources[0], /Авто-ордера запускаются отдельной кнопкой только на Demo/);
-  assert.match(sources[1], /const ollamaApi = 'http:\/\/127\.0\.0\.1:11434\/api'/);
-  assert.match(sources[1], /const assistantModel = 'qwen2\.5:3b'/);
-  assert.match(sources[1], /for \(const key of \['compact', 'showSummary', 'showPositions'\]\)/);
-  assert.match(sources[2], /askLocalAssistant: \(payload\) => ipcRenderer\.invoke\('assistant:command'/);
-  assert.match(sources[2], /getAssistantStatus: \(\) => ipcRenderer\.invoke\('assistant:status'/);
-  assert.match(sources[2], /setupAssistantModel: \(\) => ipcRenderer\.invoke\('assistant:setup-model'/);
-  assert.match(sources[1], /ollama\.com\/download\/windows/);
-  assert.match(sources[1], /fetch\(`\$\{ollamaApi\}\/pull`/);
-  assert.match(sources[0], /Загрузить qwen2\.5:3b/);
-  assert.match(sources[0], /onAssistantSetupProgress/);
-  const assistantHandler = sources[1].split("ipcMain.handle('assistant:command'")[1]?.split("ipcMain.handle('mt5:manual-order'")[0] || '';
-  assert.doesNotMatch(assistantHandler, /bridgeRequest|mt5:manual-order|mt5:close-position/);
-  assert.match(sources[1], /ipcMain\.handle\('assistant:arm-auto'/);
-  assert.match(sources[2], /armAssistantAuto: \(\) => ipcRenderer\.invoke\('assistant:arm-auto'/);
-  assert.match(sources[2], /runAssistantCycle: \(payload\) => ipcRenderer\.invoke\('assistant:run-cycle'/);
-  assert.match(sources[2], /disarmAssistantAuto: \(\) => ipcRenderer\.invoke\('assistant:disarm-auto'/);
-  assert.match(sources[1], /account\.accountType !== 'demo'/);
-  assert.match(sources[1], /bridgeRequest\('manual_order', \{ symbol, side: decision\.action, confirmed: true, liveConfirmed: false \}/);
-  assert.match(sources[1], /bridgeRequest\('close_position'/);
-  assert.match(sources[1], /fetch\(`https:\/\/news\.google\.com\/rss\/search/);
-  assert.match(sources[1], /AbortSignal\.timeout\(300000\)/);
-  assert.match(sources[1], /assistant-journal\.jsonl/);
-  assert.match(sources[0], /Разрешить и запустить на Demo/);
-  assert.match(sources[0], /Остановить/);
-  assert.match(sources[0], /веса модели не переобучаются/);
   assert.match(sources[0], /void sendManualOrder\(side\)/);
   assert.match(sources[0], /void sendPositionClose\(position\)/);
   assert.match(sources[0], /Введите LIVE/);
@@ -104,4 +77,12 @@ test('renderer, Electron IPC and Python bridge expose no automatic strategy or p
   assert.match(sources[3], /"manual_order"/);
   assert.match(sources[3], /QUOTE_POLL_INTERVAL_SECONDS = 0\.05/);
   assert.match(sources[3], /MAX_SPREAD_PIPS/);
+  assert.match(sources[1], /ipcMain\.handle\('market-analyst:analyze'/);
+  assert.match(sources[1], /safeStorage\.encryptString/);
+  assert.match(sources[2], /analyzeMarket: \(payload\) => ipcRenderer\.invoke\('market-analyst:analyze'/);
+  assert.match(sources[5], /StateGraph/);
+  assert.match(sources[5], /https:\/\/www\.rba\.gov\.au\/rss\/rss-cb-media-releases\.xml/);
+  assert.match(sources[5], /https:\/\/www\.bankofcanada\.ca\/content_type\/press-releases\/feed\//);
+  assert.doesNotMatch(sources[5], /manual_order|close_position/);
+  assert.match(sources[5], /tradeSent: false/);
 });
